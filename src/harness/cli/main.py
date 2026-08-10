@@ -13,6 +13,7 @@ import asyncio
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TextIO
 
 from rich.console import Console
 from rich.panel import Panel
@@ -28,6 +29,7 @@ from harness.llm.registry import get_provider
 from harness.memory.preferences import make_remember_preference_tool
 from harness.memory.store import Store
 from harness.observability.logging import get_logger, setup_logging
+from harness.observability.tracing import Tracer
 from harness.planning.planner import Planner
 from harness.safety.approver import ApprovalExecutor
 from harness.safety.permissions import Permissions
@@ -99,6 +101,11 @@ def _default_agent(settings: Settings) -> Agent:
         model=settings.model,
         max_turns=settings.max_turns,
     )
+
+
+def _open_trace_file(path: str) -> TextIO:
+    """Open the JSONL trace file for appending (sync; called outside the loop)."""
+    return open(path, "a", encoding="utf-8")
 
 
 def _load_permissions(settings: Settings) -> Permissions:
@@ -180,11 +187,16 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
         prompt=_make_approval_prompt(console),
         on_pause=lambda: pause_after_turn.__setitem__(0, True),
     )
+    # JSONL trace of turn/tool events (harness.trace.jsonl by default).
+    trace_stream = _open_trace_file(settings.trace_file)
+    tracer = Tracer(trace_stream)
+
     runner = Runner(
         provider,
         session_store=store.sessions,
         tool_executor=approval,
         pause_check=lambda _state: pause_after_turn[0],
+        hooks=tracer.make_hooks(),
     )
 
     if settings.sandbox_mode != "local":
@@ -261,6 +273,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
                 "(resume with /resume <id>)"
             )
 
+    tracer.close()
     await mcp.close()
     await store.close()
     return 0

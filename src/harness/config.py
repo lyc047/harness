@@ -54,9 +54,10 @@ class Settings:
     # Permission policy file (TOML); absent => safe defaults
     permissions_file: str = "permissions.toml"
 
-    # Logging
+    # Logging / tracing
     log_level: str = "INFO"
     log_file: str = "harness.log"
+    trace_file: str = "harness.trace.jsonl"
 
     # ---- helpers ----
     _env: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
@@ -122,4 +123,5 @@ class Settings:
             permissions_file=get("HARNESS_PERMISSIONS_FILE", default="permissions.toml"),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),
             log_file=get("HARNESS_LOG_FILE", default="harness.log"),
+            trace_file=get("HARNESS_TRACE_FILE", default="harness.trace.jsonl"),
         )
