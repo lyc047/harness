@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets — never commit API keys
+.env
+
+# Runtime data (session store, logs, auto-created skills/memory)
+harness.db
+harness.db-*
+harness.log
+skills/
+memory/
