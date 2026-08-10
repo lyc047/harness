@@ -61,6 +61,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     chat = sub.add_parser("chat", help="Start an interactive REPL session.")
     chat.add_argument("--session", default=None, help="Session id to resume.")
+    chat.add_argument(
+        "--subagents",
+        action="store_true",
+        help="Enable built-in researcher/coder subagents (manager pattern).",
+    )
     return parser
 
 
@@ -114,6 +119,15 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     agent = _default_agent(settings)
     runner = Runner(provider, session_store=store.sessions)
     mcp = MCPClientManager()
+
+    if args.subagents:
+        from harness.agents.examples import example_subagents
+        from harness.agents.orchestrator import add_subagents
+
+        add_subagents(agent, runner, example_subagents())
+        console.print(
+            "[dim]subagents enabled: delegate_to_researcher, delegate_to_coder[/]"
+        )
 
     session_id: str | None = None
     if args.session:
