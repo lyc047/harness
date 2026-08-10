@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp>=2.0.0",
     "openai>=2.53.0",
+    "paramiko>=5.0.0",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
@@ -32,6 +33,9 @@ dev = [
     "ruff>=0.16.2",
 ]
 
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
 # Use the Tsinghua PyPI mirror by default (pypi.org is intermittently
 # unreachable on this network). Override with `--index-url` if needed.
 [tool.uv]
@@ -48,9 +52,18 @@ extend-exclude = [".venv", ".git"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
-ignore = ["B008"]  # function-call-in-default-argument (deliberate in config)
+ignore = [
+    "B008",  # function-call-in-default-argument (deliberate in config)
+    "ASYNC109",  # timeout params are durations passed to wait_for, not asyncio.timeout
+]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 exclude = ["tests/"]
+
+# paramiko ships no type stubs; treat it as untyped (imported lazily in the
+# SSH sandbox, so typing coverage there is intentionally thin).
+[[tool.mypy.overrides]]
+module = ["paramiko.*"]
+ignore_missing_imports = true

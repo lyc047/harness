@@ -31,6 +31,7 @@ from harness.observability.logging import get_logger, setup_logging
 from harness.planning.planner import Planner
 from harness.safety.approver import ApprovalExecutor
 from harness.safety.permissions import Permissions
+from harness.sandbox import SandboxedExecutor, build_sandbox
 from harness.skills.loader import make_create_skill_tool
 from harness.skills.registry import SkillRegistry
 from harness.tools.builtin import builtin_registry
@@ -40,17 +41,28 @@ logger = get_logger("cli")
 
 
 def _force_utf8_stdio() -> None:
-    """Reconfigure stdout/stderr to UTF-8.
+    """Reconfigure stdin/stdout/stderr to UTF-8.
 
     On Chinese/Japanese Windows the console defaults to a GBK/Shift-JIS
     codec, and rich's legacy renderer crashes on non-ASCII glyphs (e.g. the
     panel bullet). Forcing UTF-8 fixes both piped and interactive output.
+
+    Piped stdin is the tricky one: a pipe decodes with the locale codec plus
+    ``errors="surrogateescape"``, so UTF-8 bytes arrive as mojibake containing
+    lone surrogates (``\\udca8``) — writing those to SQLite crashes with
+    ``UnicodeEncodeError``. Interactive stdin uses the console API and is fine,
+    so we only touch it when it is not a TTY.
     """
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         except (AttributeError, OSError):
             pass  # not a TextIOWrapper (already replaced) or unsupported
+    try:
+        if not sys.stdin.isatty():
+            sys.stdin.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, OSError):
+        pass
 
 
 DEFAULT_INSTRUCTIONS = """\
@@ -149,12 +161,21 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     agent.tools.register(make_remember_preference_tool(store.preferences))
     agent.instructions = skill_registry.inject(agent.instructions)
 
+    # Sandbox: bash runs through the configured provider (local dev default,
+    # remote SSH for isolation). Approval wraps it so humans see commands first.
+    try:
+        sandbox = build_sandbox(settings)
+    except ValueError as exc:
+        console.print(f"[red]Sandbox config error:[/] {exc}")
+        return 1
+    sandboxed = SandboxedExecutor(default_executor, sandbox)
+
     # Human-in-the-loop: ASK-decided tools prompt the user; "p" pauses after
     # the current turn, saving a checkpoint the /resume command can restore.
     permissions = _load_permissions(settings)
     pause_after_turn: list[bool] = [False]
     approval = ApprovalExecutor(
-        default_executor,
+        sandboxed,
         permissions,
         prompt=_make_approval_prompt(console),
         on_pause=lambda: pause_after_turn.__setitem__(0, True),
@@ -165,6 +186,16 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
         tool_executor=approval,
         pause_check=lambda _state: pause_after_turn[0],
     )
+
+    if settings.sandbox_mode != "local":
+        available = await sandbox.check_available()
+        if not available:
+            console.print(
+                f"[yellow]Sandbox unavailable ({settings.sandbox_mode}); "
+                "bash calls will fail until a host is reachable.[/]"
+            )
+        else:
+            console.print(f"[dim]sandbox: {settings.sandbox_mode}[/]")
     planner = Planner(provider, settings.model)
     mcp = MCPClientManager()
 
