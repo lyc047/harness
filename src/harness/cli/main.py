@@ -16,13 +16,14 @@ from rich.console import Console
 from rich.panel import Panel
 
 from harness.cli.commands import handle_command
+from harness.cli.render import render_stream_event
 from harness.config import Settings
 from harness.core.agent import Agent
-from harness.core.runner import RunDone, Runner, ToolResultEvent
-from harness.llm.base import StreamReasoning, StreamText, StreamToolCall
+from harness.core.runner import Runner
 from harness.llm.registry import get_provider
 from harness.memory.store import Store
 from harness.observability.logging import get_logger, setup_logging
+from harness.planning.planner import Planner
 from harness.tools.builtin import builtin_registry
 from harness.tools.mcp.client import MCPClientManager
 
@@ -84,24 +85,6 @@ async def _aprompt(console: Console, prompt: str) -> str:
     return await asyncio.get_event_loop().run_in_executor(None, input, prompt)
 
 
-def _render_stream_event(event: object, console: Console) -> None:
-    if isinstance(event, StreamText):
-        console.print(event.text, end="")
-    elif isinstance(event, StreamReasoning):
-        console.print(f"[dim italic]{event.text}[/]", end="")
-    elif isinstance(event, StreamToolCall) and event.tool_call:
-        tc = event.tool_call
-        console.print(f"\n[bold cyan]▶ {tc.name}[/]({tc.arguments})")
-    elif isinstance(event, ToolResultEvent):
-        body = event.result.content
-        if len(body) > 800:
-            body = body[:800] + f"\n… [dim](truncated {len(event.result.content)} chars)[/]"
-        color = "red" if event.result.is_error else "green"
-        console.print(
-            Panel(body, title=f"← {event.tool_call.name}", border_style=color, expand=False)
-        )
-
-
 async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     console = Console()
     if not settings.api_key:
@@ -118,6 +101,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     provider = get_provider(settings)
     agent = _default_agent(settings)
     runner = Runner(provider, session_store=store.sessions)
+    planner = Planner(provider, settings.model)
     mcp = MCPClientManager()
 
     if args.subagents:
@@ -162,17 +146,15 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
 
         if line.startswith("/"):
             if await handle_command(line, console=console, store=store, agent=agent,
-                                    current_session=holder, mcp=mcp):
+                                    current_session=holder, mcp=mcp, planner=planner,
+                                    runner=runner):
                 break
             session_id = holder[0]
             continue
 
         # Run the agent, streaming events.
         async for event in runner.run_streamed(agent, line, session_id=session_id):
-            if isinstance(event, RunDone):
-                console.print("")
-            else:
-                _render_stream_event(event, console)
+            render_stream_event(event, console)
 
     await mcp.close()
     await store.close()

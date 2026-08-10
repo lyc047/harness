@@ -5,10 +5,15 @@ from __future__ import annotations
 import sys
 
 from rich.console import Console
+from rich.panel import Panel
 
+from harness.cli.render import render_stream_event
 from harness.core.agent import Agent
 from harness.core.messages import Message
+from harness.core.runner import Runner
 from harness.memory.store import Store
+from harness.planning.executor import PlanDone, PlanExecutor, PlanRevised, StepEnd, StepStart
+from harness.planning.planner import Planner
 from harness.tools.mcp.client import MCPClientManager, MCPServerConfig
 from harness.tools.mcp.manager import register_mcp_server, unregister_mcp_server
 
@@ -25,6 +30,7 @@ Commands:
   /mcp add http <name> <url>                  connect an HTTP MCP server
   /mcp list         list connected MCP servers
   /mcp remove <name>  disconnect an MCP server
+  /plan <goal>      plan and execute a multi-step task step by step
 """
 
 
@@ -36,6 +42,8 @@ async def handle_command(
     agent: Agent,
     current_session: list[str | None],
     mcp: MCPClientManager,
+    planner: Planner,
+    runner: Runner,
 ) -> bool:
     """Run a slash command. Returns True if the REPL should exit."""
     cmd, _, arg = line.partition(" ")
@@ -87,6 +95,16 @@ async def handle_command(
 
     elif cmd == "/mcp":
         await _mcp_command(arg, console=console, agent=agent, mcp=mcp)
+
+    elif cmd == "/plan":
+        await _plan_command(
+            arg,
+            console=console,
+            agent=agent,
+            planner=planner,
+            runner=runner,
+            session_id=current_session[0],
+        )
 
     else:
         console.print(f"[yellow]Unknown command:[/] {line}  (try /help)")
@@ -166,3 +184,44 @@ async def _mcp_command(
 
     else:
         console.print("[yellow]Usage:[/] /mcp add|list|remove  (see /help)")
+
+
+async def _plan_command(
+    arg: str,
+    *,
+    console: Console,
+    agent: Agent,
+    planner: Planner,
+    runner: Runner,
+    session_id: str | None,
+) -> None:
+    """Handle ``/plan <goal>``: generate a plan, then execute it step by step."""
+    goal = arg.strip()
+    if not goal:
+        console.print("[yellow]Usage:[/] /plan <goal>")
+        return
+
+    console.print("[cyan]Generating plan…[/]")
+    try:
+        plan = await planner.plan(goal)
+    except Exception as exc:  # noqa: BLE001 — show planning failures clearly
+        console.print(f"[red]Planning failed:[/] {type(exc).__name__}: {exc}")
+        return
+
+    console.print(Panel(plan.summary(), title="Plan", border_style="cyan"))
+
+    executor = PlanExecutor(runner, planner)
+    async for event in executor.execute_streamed(agent, plan, session_id=session_id):
+        if isinstance(event, StepStart):
+            console.print(f"\n[bold cyan]==> {event.step.id}. {event.step.title}[/]")
+        elif isinstance(event, StepEnd):
+            state = "[green]done[/]" if event.step.status == "done" else "[red]failed[/]"
+            console.print(f"[{state}] {event.step.title}")
+        elif isinstance(event, PlanRevised):
+            console.print("\n[magenta]Plan revised:[/]")
+            console.print(plan.summary())
+        elif isinstance(event, PlanDone):
+            console.print("\n[bold green]Plan complete:[/]")
+            console.print(plan.summary())
+        else:
+            render_stream_event(event, console)
