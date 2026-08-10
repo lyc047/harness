@@ -51,6 +51,9 @@ class Settings:
     skills_dir: str = "skills"
     memory_dir: str = "memory"
 
+    # Permission policy file (TOML); absent => safe defaults
+    permissions_file: str = "permissions.toml"
+
     # Logging
     log_level: str = "INFO"
     log_file: str = "harness.log"
@@ -116,6 +119,7 @@ class Settings:
             sandbox_workdir=get("SANDBOX_WORKDIR", default="~/harness-workspace"),
             skills_dir=get("HARNESS_SKILLS_DIR", default="skills"),
             memory_dir=get("HARNESS_MEMORY_DIR", default="memory"),
+            permissions_file=get("HARNESS_PERMISSIONS_FILE", default="permissions.toml"),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),
             log_file=get("HARNESS_LOG_FILE", default="harness.log"),
         )

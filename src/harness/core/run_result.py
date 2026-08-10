@@ -28,6 +28,18 @@ class MaxTurnsExceeded(RuntimeError):
         self.max_turns = max_turns
 
 
+class RunPaused(RuntimeError):
+    """Raised when a run is paused at a turn boundary.
+
+    Carries the serializable :class:`RunState` checkpoint so the run can be
+    resumed later with ``Runner.resume_streamed``.
+    """
+
+    def __init__(self, state: RunState) -> None:
+        super().__init__("run paused (checkpoint available)")
+        self.state = state
+
+
 @dataclass
 class RunState:
     """Serializable snapshot of an in-flight run, for pause/resume (P5).

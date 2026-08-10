@@ -1,0 +1,37 @@
+# Permission policy for human-in-the-loop tool approval.
+#
+# Copy to `permissions.toml` (or point HARNESS_PERMISSIONS_FILE at it) to
+# customise. Decisions per tool call are: deny > ask > allow among matching
+# rules; tools matching no rule fall back to `default`.
+#
+# `tool`   — exact name or fnmatch glob (e.g. "bash", "mcp_*", "*")
+# `pattern`— optional regex over the JSON-encoded arguments
+
+default = "ask"
+
+[[rules]]
+tool = "read_file"
+permission = "allow"
+
+[[rules]]
+tool = "glob"
+permission = "allow"
+
+[[rules]]
+tool = "grep"
+permission = "allow"
+
+# Interactive approval for shell and writes.
+[[rules]]
+tool = "bash"
+permission = "ask"
+
+[[rules]]
+tool = "write_file"
+permission = "ask"
+
+# Hard deny a destructive pattern regardless of the allow above.
+[[rules]]
+tool = "bash"
+permission = "deny"
+pattern = "rm -rf"

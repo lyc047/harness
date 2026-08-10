@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -19,11 +21,15 @@ from harness.cli.commands import handle_command
 from harness.cli.render import render_stream_event
 from harness.config import Settings
 from harness.core.agent import Agent
-from harness.core.runner import Runner
+from harness.core.messages import ToolCall
+from harness.core.run_result import RunPaused
+from harness.core.runner import Runner, default_executor
 from harness.llm.registry import get_provider
 from harness.memory.store import Store
 from harness.observability.logging import get_logger, setup_logging
 from harness.planning.planner import Planner
+from harness.safety.approver import ApprovalExecutor
+from harness.safety.permissions import Permissions
 from harness.tools.builtin import builtin_registry
 from harness.tools.mcp.client import MCPClientManager
 
@@ -80,6 +86,37 @@ def _default_agent(settings: Settings) -> Agent:
     )
 
 
+def _load_permissions(settings: Settings) -> Permissions:
+    """Load the TOML policy file, falling back to safe defaults."""
+    path = Path(settings.permissions_file)
+    if path.exists():
+        try:
+            return Permissions.from_config(path)
+        except Exception as exc:  # noqa: BLE001 — a broken policy must not crash the REPL
+            logger.warning("failed to load %s (%s); using defaults", path, exc)
+    return Permissions.default_harness()
+
+
+def _make_approval_prompt(console: Console) -> Callable[[ToolCall], Awaitable[str]]:
+    """Interactive y/n/a/e/p prompt for ASK-decided tool calls."""
+
+    async def prompt(tool_call: ToolCall) -> str:
+        console.print(
+            f"\n[bold yellow]⚠️  Approval required:[/] [cyan]{tool_call.name}[/]"
+            f"({tool_call.arguments})"
+        )
+        console.print(
+            "[dim]  y = allow once   n = deny   a = allow for session  "
+            "e = edit args   p = allow + pause after this turn[/]"
+        )
+        try:
+            return await _aprompt(console, "  > ")
+        except (EOFError, KeyboardInterrupt):
+            return "n"  # interrupted -> fail closed
+
+    return prompt
+
+
 async def _aprompt(console: Console, prompt: str) -> str:
     """Prompt on stdin without blocking the event loop."""
     return await asyncio.get_event_loop().run_in_executor(None, input, prompt)
@@ -100,7 +137,23 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
 
     provider = get_provider(settings)
     agent = _default_agent(settings)
-    runner = Runner(provider, session_store=store.sessions)
+
+    # Human-in-the-loop: ASK-decided tools prompt the user; "p" pauses after
+    # the current turn, saving a checkpoint the /resume command can restore.
+    permissions = _load_permissions(settings)
+    pause_after_turn: list[bool] = [False]
+    approval = ApprovalExecutor(
+        default_executor,
+        permissions,
+        prompt=_make_approval_prompt(console),
+        on_pause=lambda: pause_after_turn.__setitem__(0, True),
+    )
+    runner = Runner(
+        provider,
+        session_store=store.sessions,
+        tool_executor=approval,
+        pause_check=lambda _state: pause_after_turn[0],
+    )
     planner = Planner(provider, settings.model)
     mcp = MCPClientManager()
 
@@ -147,14 +200,23 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
         if line.startswith("/"):
             if await handle_command(line, console=console, store=store, agent=agent,
                                     current_session=holder, mcp=mcp, planner=planner,
-                                    runner=runner):
+                                    runner=runner, permissions=permissions):
                 break
             session_id = holder[0]
             continue
 
-        # Run the agent, streaming events.
-        async for event in runner.run_streamed(agent, line, session_id=session_id):
-            render_stream_event(event, console)
+        # Run the agent, streaming events. A paused run saves a checkpoint the
+        # user can restore later with /resume <id>.
+        pause_after_turn[0] = False
+        try:
+            async for event in runner.run_streamed(agent, line, session_id=session_id):
+                render_stream_event(event, console)
+        except RunPaused as exc:
+            checkpoint_id = await store.sessions.save_checkpoint(exc.state)
+            console.print(
+                f"\n[yellow]⏸ Paused. Checkpoint saved:[/] [cyan]{checkpoint_id}[/] "
+                "(resume with /resume <id>)"
+            )
 
     await mcp.close()
     await store.close()

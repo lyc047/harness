@@ -14,6 +14,7 @@ from harness.core.runner import Runner
 from harness.memory.store import Store
 from harness.planning.executor import PlanDone, PlanExecutor, PlanRevised, StepEnd, StepStart
 from harness.planning.planner import Planner
+from harness.safety.permissions import Permissions
 from harness.tools.mcp.client import MCPClientManager, MCPServerConfig
 from harness.tools.mcp.manager import register_mcp_server, unregister_mcp_server
 
@@ -31,6 +32,9 @@ Commands:
   /mcp list         list connected MCP servers
   /mcp remove <name>  disconnect an MCP server
   /plan <goal>      plan and execute a multi-step task step by step
+  /checkpoints      list saved run checkpoints
+  /resume <id>      resume a paused run from a checkpoint
+  /permissions      show the active permission policy
 """
 
 
@@ -44,6 +48,7 @@ async def handle_command(
     mcp: MCPClientManager,
     planner: Planner,
     runner: Runner,
+    permissions: Permissions | None = None,
 ) -> bool:
     """Run a slash command. Returns True if the REPL should exit."""
     cmd, _, arg = line.partition(" ")
@@ -105,6 +110,26 @@ async def handle_command(
             runner=runner,
             session_id=current_session[0],
         )
+
+    elif cmd == "/checkpoints":
+        await _checkpoints_command(console=console, store=store)
+
+    elif cmd == "/resume":
+        await _resume_command(
+            arg,
+            console=console,
+            store=store,
+            agent=agent,
+            runner=runner,
+            current_session=current_session,
+        )
+
+    elif cmd == "/permissions":
+        if permissions is None:
+            console.print("[yellow]No permission policy attached.[/]")
+        else:
+            console.print(f"[cyan]default={permissions.default.value}[/]")
+            console.print(permissions.to_toml(), markup=False)
 
     else:
         console.print(f"[yellow]Unknown command:[/] {line}  (try /help)")
@@ -225,3 +250,42 @@ async def _plan_command(
             console.print(plan.summary())
         else:
             render_stream_event(event, console)
+
+
+async def _checkpoints_command(*, console: Console, store: Store) -> None:
+    """Handle ``/checkpoints``: list saved run checkpoints."""
+    checkpoints = await store.sessions.list_checkpoints()
+    if not checkpoints:
+        console.print("No saved checkpoints. Pause a run (p at an approval prompt) to create one.")
+        return
+    for cid, created in checkpoints:
+        console.print(f"  [cyan]{cid}[/]  (saved {created})")
+
+
+async def _resume_command(
+    arg: str,
+    *,
+    console: Console,
+    store: Store,
+    agent: Agent,
+    runner: Runner,
+    current_session: list[str | None],
+) -> None:
+    """Handle ``/resume <id>``: continue a paused run from its checkpoint."""
+    checkpoint_id = arg.strip()
+    if not checkpoint_id:
+        console.print("[yellow]Usage:[/] /resume <checkpoint-id>")
+        return
+    state = await store.sessions.load_checkpoint(checkpoint_id)
+    if state is None:
+        console.print(f"[red]No such checkpoint:[/] {checkpoint_id}")
+        return
+
+    if state.session_id:
+        current_session[0] = state.session_id
+    console.print(
+        f"[cyan]Resuming[/] checkpoint [cyan]{checkpoint_id}[/] "
+        f"(turn {state.turns}, session {state.session_id or '-'})…"
+    )
+    async for event in runner.resume_streamed(agent, state, session_id=state.session_id):
+        render_stream_event(event, console)

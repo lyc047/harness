@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from harness.core.agent import Agent
 from harness.core.hooks import Hooks
 from harness.core.messages import Message, ToolCall
-from harness.core.run_result import MaxTurnsExceeded, RunResult
+from harness.core.run_result import (
+    MaxTurnsExceeded,
+    RunPaused,
+    RunResult,
+    RunState,
+)
 from harness.llm.base import LLMProvider, StreamEnd, StreamEvent
 from harness.memory.session import SessionStore
 from harness.observability.logging import get_logger
@@ -28,6 +33,10 @@ logger = get_logger("core.runner")
 # Executes a single tool call -> result. P1 default resolves against the agent's
 # registry; P5 wraps it with approval, P7 with sandbox delegation.
 ToolExecutor = Callable[[Agent, ToolCall], Awaitable[ToolResult]]
+
+# Consulted at each turn boundary; returning True pauses the run and raises
+# RunPaused with a checkpoint for later resume.
+PauseCheck = Callable[[RunState], bool]
 
 
 @dataclass
@@ -45,7 +54,8 @@ class ToolResultEvent:
     result: ToolResult
 
 
-async def _default_executor(agent: Agent, tool_call: ToolCall) -> ToolResult:
+async def default_executor(agent: Agent, tool_call: ToolCall) -> ToolResult:
+    """Resolve a tool call against the agent's registry and run it."""
     tool = agent.tools.get(tool_call.name)
     if tool is None:
         return ToolResult.error(f"unknown tool: {tool_call.name!r}")
@@ -60,11 +70,13 @@ class Runner:
         hooks: Hooks | None = None,
         session_store: SessionStore | None = None,
         tool_executor: ToolExecutor | None = None,
+        pause_check: PauseCheck | None = None,
     ) -> None:
         self._provider = provider
         self._hooks = hooks or Hooks()
         self._session_store = session_store
-        self._tool_executor = tool_executor or _default_executor
+        self._tool_executor = tool_executor or default_executor
+        self._pause_check = pause_check
 
     # -- public API -- #
 
@@ -94,23 +106,47 @@ class Runner:
         """Stream events of a full run; a final :class:`RunDone` ends the stream."""
         return self._run_streamed(agent, user_input, session_id=session_id)
 
+    def resume_streamed(
+        self,
+        agent: Agent,
+        state: RunState,
+        *,
+        session_id: str | None = None,
+    ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
+        """Continue a paused run from its :class:`RunState` checkpoint."""
+        return self._run_streamed(
+            agent,
+            None,
+            session_id=session_id or state.session_id,
+            resume_state=state,
+        )
+
     # -- implementation -- #
 
     async def _run_streamed(
         self,
         agent: Agent,
-        user_input: str,
+        user_input: str | None,
         *,
         session_id: str | None,
+        resume_state: RunState | None = None,
     ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
         await self._hooks.emit(self._hooks.on_run_start, agent)
-        messages = await self._prepare_messages(agent, session_id)
-        messages.append(Message.user(user_input))
+        if resume_state is not None:
+            messages = list(resume_state.messages)
+            start_turn = resume_state.turns
+            max_turns = resume_state.max_turns
+        else:
+            messages = await self._prepare_messages(agent, session_id)
+            if user_input is not None:
+                messages.append(Message.user(user_input))
+            start_turn = 0
+            max_turns = agent.max_turns
         await self._persist(session_id, messages)
 
         tool_schemas = agent.tool_schemas()
 
-        for turn in range(agent.max_turns):
+        for turn in range(start_turn, max_turns):
             await self._hooks.emit(self._hooks.on_turn_start, turn, agent)
             await self._hooks.emit(self._hooks.on_model_call, agent)
 
@@ -147,6 +183,15 @@ class Runner:
 
                 messages.extend(tool_messages)
                 await self._persist(session_id, messages)
+                if self._pause_check is not None:
+                    checkpoint = RunState(
+                        messages=list(messages),
+                        turns=turn + 1,
+                        max_turns=max_turns,
+                        session_id=session_id,
+                    )
+                    if self._pause_check(checkpoint):
+                        raise RunPaused(checkpoint)
                 continue
 
             # final answer
