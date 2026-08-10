@@ -15,6 +15,7 @@ from harness.memory.store import Store
 from harness.planning.executor import PlanDone, PlanExecutor, PlanRevised, StepEnd, StepStart
 from harness.planning.planner import Planner
 from harness.safety.permissions import Permissions
+from harness.skills.registry import SkillRegistry
 from harness.tools.mcp.client import MCPClientManager, MCPServerConfig
 from harness.tools.mcp.manager import register_mcp_server, unregister_mcp_server
 
@@ -35,6 +36,8 @@ Commands:
   /checkpoints      list saved run checkpoints
   /resume <id>      resume a paused run from a checkpoint
   /permissions      show the active permission policy
+  /skills           list discovered skills
+  /skill load <name>  inject a skill into the current session
 """
 
 
@@ -49,6 +52,7 @@ async def handle_command(
     planner: Planner,
     runner: Runner,
     permissions: Permissions | None = None,
+    skills: SkillRegistry | None = None,
 ) -> bool:
     """Run a slash command. Returns True if the REPL should exit."""
     cmd, _, arg = line.partition(" ")
@@ -130,6 +134,29 @@ async def handle_command(
         else:
             console.print(f"[cyan]default={permissions.default.value}[/]")
             console.print(permissions.to_toml(), markup=False)
+
+    elif cmd == "/skills":
+        if skills is None:
+            console.print("[yellow]No skill registry attached.[/]")
+        else:
+            skills.refresh()
+            names = skills.names()
+            if not names:
+                console.print(
+                    f"No skills found in {skills.directory}. The agent can create "
+                    "one with the create_skill tool."
+                )
+            else:
+                for name in names:
+                    skill = skills.get(name)
+                    desc = skill.description if skill else ""
+                    console.print(f"  [cyan]{name}[/] — {desc}")
+
+    elif cmd == "/skill":
+        await _skill_command(
+            arg, console=console, store=store, agent=agent, skills=skills,
+            current_session=current_session,
+        )
 
     else:
         console.print(f"[yellow]Unknown command:[/] {line}  (try /help)")
@@ -289,3 +316,45 @@ async def _resume_command(
     )
     async for event in runner.resume_streamed(agent, state, session_id=state.session_id):
         render_stream_event(event, console)
+
+
+async def _skill_command(
+    arg: str,
+    *,
+    console: Console,
+    store: Store,
+    agent: Agent,
+    skills: SkillRegistry | None,
+    current_session: list[str | None],
+) -> None:
+    """Handle ``/skill load <name>``: inject a skill into the active session."""
+    sub, _, name = arg.partition(" ")
+    if sub.strip().lower() != "load":
+        console.print("[yellow]Usage:[/] /skill load <name>")
+        return
+    name = name.strip()
+    if not name:
+        console.print("[yellow]Usage:[/] /skill load <name>")
+        return
+    if skills is None:
+        console.print("[yellow]No skill registry attached.[/]")
+        return
+
+    skills.refresh()
+    skill = skills.get(name)
+    if skill is None:
+        console.print(f"[red]No such skill:[/] {name}")
+        return
+
+    session_id = current_session[0]
+    if not session_id:
+        console.print("[yellow]No active session to inject into.[/]")
+        return
+
+    block = skills.to_prompt_block(names=[name])
+    messages = await store.sessions.load_messages(session_id)
+    if not messages or messages[0].role != "system":
+        messages.insert(0, Message.system(agent.instructions))
+    messages[0] = Message.system((messages[0].content or "") + "\n\n" + block)
+    await store.sessions.save_messages(session_id, messages)
+    console.print(f"[green]Loaded skill[/] [cyan]{name}[/] into the current session.")

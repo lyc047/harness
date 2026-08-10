@@ -25,11 +25,14 @@ from harness.core.messages import ToolCall
 from harness.core.run_result import RunPaused
 from harness.core.runner import Runner, default_executor
 from harness.llm.registry import get_provider
+from harness.memory.preferences import make_remember_preference_tool
 from harness.memory.store import Store
 from harness.observability.logging import get_logger, setup_logging
 from harness.planning.planner import Planner
 from harness.safety.approver import ApprovalExecutor
 from harness.safety.permissions import Permissions
+from harness.skills.loader import make_create_skill_tool
+from harness.skills.registry import SkillRegistry
 from harness.tools.builtin import builtin_registry
 from harness.tools.mcp.client import MCPClientManager
 
@@ -138,6 +141,14 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     provider = get_provider(settings)
     agent = _default_agent(settings)
 
+    # Self-evolving skills + user preferences: expose the tools and inject any
+    # discovered skills into the agent's system prompt so they apply from turn 1.
+    skill_registry = SkillRegistry(settings.skills_dir)
+    skill_registry.discover()
+    agent.tools.register(make_create_skill_tool(skill_registry))
+    agent.tools.register(make_remember_preference_tool(store.preferences))
+    agent.instructions = skill_registry.inject(agent.instructions)
+
     # Human-in-the-loop: ASK-decided tools prompt the user; "p" pauses after
     # the current turn, saving a checkpoint the /resume command can restore.
     permissions = _load_permissions(settings)
@@ -200,7 +211,8 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
         if line.startswith("/"):
             if await handle_command(line, console=console, store=store, agent=agent,
                                     current_session=holder, mcp=mcp, planner=planner,
-                                    runner=runner, permissions=permissions):
+                                    runner=runner, permissions=permissions,
+                                    skills=skill_registry):
                 break
             session_id = holder[0]
             continue
