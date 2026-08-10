@@ -24,6 +24,7 @@ from harness.llm.registry import get_provider
 from harness.memory.store import Store
 from harness.observability.logging import get_logger, setup_logging
 from harness.tools.builtin import builtin_registry
+from harness.tools.mcp.client import MCPClientManager
 
 logger = get_logger("cli")
 
@@ -112,6 +113,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     provider = get_provider(settings)
     agent = _default_agent(settings)
     runner = Runner(provider, session_store=store.sessions)
+    mcp = MCPClientManager()
 
     session_id: str | None = None
     if args.session:
@@ -146,7 +148,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
 
         if line.startswith("/"):
             if await handle_command(line, console=console, store=store, agent=agent,
-                                    current_session=holder):
+                                    current_session=holder, mcp=mcp):
                 break
             session_id = holder[0]
             continue
@@ -158,6 +160,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
             else:
                 _render_stream_event(event, console)
 
+    await mcp.close()
     await store.close()
     return 0
 

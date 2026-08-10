@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+
 from rich.console import Console
 
 from harness.core.agent import Agent
 from harness.core.messages import Message
 from harness.memory.store import Store
+from harness.tools.mcp.client import MCPClientManager, MCPServerConfig
+from harness.tools.mcp.manager import register_mcp_server, unregister_mcp_server
 
 HELP_TEXT = """\
 Commands:
@@ -17,6 +21,10 @@ Commands:
   /session <id>    resume a saved session
   /tools           list tools available to the agent
   /clear           wipe the current session's history
+  /mcp add stdio <name> <command> args...     connect a stdio MCP server
+  /mcp add http <name> <url>                  connect an HTTP MCP server
+  /mcp list         list connected MCP servers
+  /mcp remove <name>  disconnect an MCP server
 """
 
 
@@ -27,6 +35,7 @@ async def handle_command(
     store: Store,
     agent: Agent,
     current_session: list[str | None],
+    mcp: MCPClientManager,
 ) -> bool:
     """Run a slash command. Returns True if the REPL should exit."""
     cmd, _, arg = line.partition(" ")
@@ -76,7 +85,84 @@ async def handle_command(
         else:
             console.print("No active session to clear.")
 
+    elif cmd == "/mcp":
+        await _mcp_command(arg, console=console, agent=agent, mcp=mcp)
+
     else:
         console.print(f"[yellow]Unknown command:[/] {line}  (try /help)")
 
     return False
+
+
+async def _mcp_command(
+    arg: str, *, console: Console, agent: Agent, mcp: MCPClientManager
+) -> None:
+    """Handle the ``/mcp`` subcommands (add stdio|http, list, remove)."""
+    sub, _, subarg = arg.partition(" ")
+    sub = sub.strip().lower()
+    subarg = subarg.strip()
+
+    if sub == "add":
+        transport, _, rest = subarg.partition(" ")
+        transport = transport.strip().lower()
+        name, _, tail = rest.partition(" ")
+        name = name.strip()
+        tail = tail.strip()
+
+        if transport == "stdio" and name and tail:
+            parts = tail.split()
+            command, args = parts[0], parts[1:]
+            if command.endswith(".py"):
+                # Windows can't exec a .py directly; run it with the current
+                # interpreter so `/mcp add stdio demo python path/server.py`
+                # and `/mcp add stdio demo path/server.py` both work.
+                command, args = sys.executable, [parts[0], *parts[1:]]
+            config = MCPServerConfig(name=name, transport="stdio", command=command, args=args)
+        elif transport == "http" and name and tail:
+            config = MCPServerConfig(name=name, transport="http", url=tail)
+        else:
+            console.print(
+                "[yellow]Usage:[/] /mcp add stdio <name> <command> args...  |  "
+                "/mcp add http <name> <url>"
+            )
+            return
+
+        try:
+            names = await register_mcp_server(mcp, config, agent.tools)
+        except Exception as exc:  # noqa: BLE001 — show connect failures clearly
+            console.print(f"[red]Failed to connect MCP server:[/] {type(exc).__name__}: {exc}")
+            return
+        console.print(
+            f"[green]Connected[/] {name} — {len(names)} tools: [cyan]{', '.join(names)}[/]"
+        )
+
+    elif sub == "list":
+        if not mcp.servers:
+            console.print(
+                "No MCP servers connected. Use /mcp add stdio <name> <command> "
+                "or /mcp add http <name> <url>."
+            )
+            return
+        for server_name in mcp.servers:
+            tools = [t for t in agent.tools.all() if getattr(t, "server", None) == server_name]
+            console.print(
+                f"  [cyan]{server_name}[/] — {len(tools)} tools: "
+                f"{', '.join(t.name for t in tools)}"
+            )
+
+    elif sub == "remove":
+        if not subarg:
+            console.print("[yellow]Usage:[/] /mcp remove <name>")
+        elif not mcp.is_connected(subarg):
+            console.print(f"[yellow]Not connected:[/] {subarg}")
+        else:
+            unregister_mcp_server(subarg, agent.tools)
+            try:
+                await mcp.remove_server(subarg)
+            except Exception as exc:  # noqa: BLE001 — removal must not crash the REPL
+                console.print(f"[red]Failed to remove:[/] {type(exc).__name__}: {exc}")
+                return
+            console.print(f"[green]Removed[/] {subarg}")
+
+    else:
+        console.print("[yellow]Usage:[/] /mcp add|list|remove  (see /help)")
