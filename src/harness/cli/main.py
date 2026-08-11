@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import TextIO
 
 from rich.console import Console
@@ -21,25 +21,13 @@ from rich.panel import Panel
 from harness.cli.commands import handle_command
 from harness.cli.render import render_stream_event
 from harness.config import Settings
-from harness.core.agent import Agent
+from harness.core.compose import build_core_stack
 from harness.core.messages import ToolCall
 from harness.core.run_result import RunPaused
-from harness.core.runner import Runner, default_executor
-from harness.llm.registry import get_provider
-from harness.memory.preferences import make_remember_preference_tool
 from harness.memory.store import Store
-from harness.observability.logging import get_logger, setup_logging
+from harness.observability.logging import setup_logging
 from harness.observability.tracing import Tracer
-from harness.planning.planner import Planner
-from harness.safety.approver import ApprovalExecutor
-from harness.safety.permissions import Permissions
-from harness.sandbox import SandboxedExecutor, build_sandbox
-from harness.skills.loader import make_create_skill_tool
-from harness.skills.registry import SkillRegistry
-from harness.tools.builtin import builtin_registry
 from harness.tools.mcp.client import MCPClientManager
-
-logger = get_logger("cli")
 
 
 def _force_utf8_stdio() -> None:
@@ -67,14 +55,6 @@ def _force_utf8_stdio() -> None:
         pass
 
 
-DEFAULT_INSTRUCTIONS = """\
-You are a capable AI assistant running inside the 'harness' agent framework.
-You have access to tools for reading, writing, searching and running shell
-commands. Use them when they help answer the user's question.
-Be concise, accurate, and prefer existing files over re-creating them.
-"""
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="harness",
@@ -90,33 +70,19 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable built-in researcher/coder subagents (manager pattern).",
     )
-    return parser
-
-
-def _default_agent(settings: Settings) -> Agent:
-    return Agent(
-        name="assistant",
-        instructions=DEFAULT_INSTRUCTIONS,
-        tools=builtin_registry(),
-        model=settings.model,
-        max_turns=settings.max_turns,
+    serve = sub.add_parser("serve", help="Run the Codex-style web UI.")
+    serve.add_argument("--host", default="127.0.0.1", help="Host to bind.")
+    serve.add_argument("--port", type=int, default=8000, help="Port to bind.")
+    serve.add_argument(
+        "--reload", action="store_true", help="Auto-reload on source changes (dev)."
     )
+    serve.add_argument("--model", default=None, help="Override the LLM model.")
+    return parser
 
 
 def _open_trace_file(path: str) -> TextIO:
     """Open the JSONL trace file for appending (sync; called outside the loop)."""
     return open(path, "a", encoding="utf-8")
-
-
-def _load_permissions(settings: Settings) -> Permissions:
-    """Load the TOML policy file, falling back to safe defaults."""
-    path = Path(settings.permissions_file)
-    if path.exists():
-        try:
-            return Permissions.from_config(path)
-        except Exception as exc:  # noqa: BLE001 — a broken policy must not crash the REPL
-            logger.warning("failed to load %s (%s); using defaults", path, exc)
-    return Permissions.default_harness()
 
 
 def _make_approval_prompt(console: Console) -> Callable[[ToolCall], Awaitable[str]]:
@@ -157,46 +123,31 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     store = Store(settings)
     await store.initialize()
 
-    provider = get_provider(settings)
-    agent = _default_agent(settings)
-
-    # Self-evolving skills + user preferences: expose the tools and inject any
-    # discovered skills into the agent's system prompt so they apply from turn 1.
-    skill_registry = SkillRegistry(settings.skills_dir)
-    skill_registry.discover()
-    agent.tools.register(make_create_skill_tool(skill_registry))
-    agent.tools.register(make_remember_preference_tool(store.preferences))
-    agent.instructions = skill_registry.inject(agent.instructions)
-
-    # Sandbox: bash runs through the configured provider (local dev default,
-    # remote SSH for isolation). Approval wraps it so humans see commands first.
-    try:
-        sandbox = build_sandbox(settings)
-    except ValueError as exc:
-        console.print(f"[red]Sandbox config error:[/] {exc}")
-        return 1
-    sandboxed = SandboxedExecutor(default_executor, sandbox)
-
-    # Human-in-the-loop: ASK-decided tools prompt the user; "p" pauses after
-    # the current turn, saving a checkpoint the /resume command can restore.
-    permissions = _load_permissions(settings)
+    # Mutable holder so "p" (allow + pause) can flag the next turn boundary.
     pause_after_turn: list[bool] = [False]
-    approval = ApprovalExecutor(
-        sandboxed,
-        permissions,
-        prompt=_make_approval_prompt(console),
-        on_pause=lambda: pause_after_turn.__setitem__(0, True),
-    )
     # JSONL trace of turn/tool events (harness.trace.jsonl by default).
     trace_stream = _open_trace_file(settings.trace_file)
     tracer = Tracer(trace_stream)
 
-    runner = Runner(
-        provider,
-        session_store=store.sessions,
-        tool_executor=approval,
-        pause_check=lambda _state: pause_after_turn[0],
-        hooks=tracer.make_hooks(),
+    try:
+        stack = await build_core_stack(
+            settings,
+            store=store,
+            prompt=_make_approval_prompt(console),
+            on_pause=lambda: pause_after_turn.__setitem__(0, True),
+            pause_check=lambda _state: pause_after_turn[0],
+            hooks=tracer.make_hooks(),
+        )
+    except ValueError as exc:
+        tracer.close()
+        console.print(f"[red]Sandbox config error:[/] {exc}")
+        return 1
+
+    agent, runner, planner = stack.agent, stack.runner, stack.planner
+    skill_registry, permissions, sandbox = (
+        stack.skill_registry,
+        stack.permissions,
+        stack.sandbox,
     )
 
     if settings.sandbox_mode != "local":
@@ -208,7 +159,6 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
             )
         else:
             console.print(f"[dim]sandbox: {settings.sandbox_mode}[/]")
-    planner = Planner(provider, settings.model)
     mcp = MCPClientManager()
 
     if args.subagents:
@@ -279,25 +229,50 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
-async def _main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-
+async def _run_chat_main(args: argparse.Namespace) -> int:
+    """Load settings, configure logging, and run the interactive REPL."""
     # Only pass --env when given; passing None would skip the default .env.
     settings = Settings.load(env_path=args.env) if args.env else Settings.load()
     if args.model:
         settings = settings.replace(model=args.model)
     setup_logging(settings.log_level, settings.log_file)
+    return await _run_chat(args, settings)
 
-    if args.command == "chat":
-        return await _run_chat(args, settings)
-    parser.error(f"unknown command: {args.command}")
-    return 2
+
+def _run_serve(args: argparse.Namespace) -> int:
+    """Boot uvicorn for the web UI (blocks; called OUTSIDE asyncio.run).
+
+    The import-string + ``factory=True`` form is what makes ``--reload`` work:
+    uvicorn re-imports the zero-arg factory in a reloader subprocess. ``--model``
+    is exported to the environment so the factory's ``Settings.load()`` picks it
+    up (uvicorn builds the app, not us).
+    """
+    import uvicorn
+
+    if args.env:
+        Settings.load(env_path=args.env)  # loads the env file into os.environ
+    if args.model:
+        os.environ["DEEPSEEK_MODEL"] = args.model
+    uvicorn.run(
+        "harness.web.server:create_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+    return 0
+
+
+def _main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    if args.command == "serve":
+        return _run_serve(args)
+    return asyncio.run(_run_chat_main(args))
 
 
 def main(argv: list[str] | None = None) -> int:
     _force_utf8_stdio()
-    return asyncio.run(_main(argv))
+    return _main(argv)
 
 
 if __name__ == "__main__":

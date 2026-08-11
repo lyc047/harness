@@ -23,6 +23,7 @@ user input → LLM → tool_calls → approval → sandbox → results → loop 
 | Human-in-the-loop approval + pause/resume checkpoints | `src/harness/safety/` |
 | Self-evolving skills + user preferences (SQLite) | `src/harness/skills/`, `src/harness/memory/` |
 | Sandboxed `bash` (local dev / remote SSH) | `src/harness/sandbox/` |
+| Codex-style web UI (streaming chat, tool cards, approvals, pause/resume) | `src/harness/web/` |
 | JSONL tracing of turns & tool calls | `src/harness/observability/tracing.py` |
 
 ## Requirements
@@ -48,8 +49,21 @@ DEEPSEEK_API_KEY=sk-...
 uv run harness chat                 # interactive REPL
 uv run harness chat --session <id>  # resume a session
 uv run harness chat --subagents     # enable researcher/coder subagents
+uv run harness serve                # Codex-style web UI → http://127.0.0.1:8000
+uv run harness serve --port 9000 --reload   # dev (auto-reloads on edits)
 uv run harness --help
 ```
+
+### Web UI
+
+`uv run harness serve` starts FastAPI/uvicorn (REST + WebSocket + static files)
+with **no build step**. It shares the exact same core stack as the CLI, so the
+two surfaces never drift. Features: session sidebar (create/switch/resume),
+streaming markdown messages with a collapsible thinking panel, tool-call cards
+showing the command + stdout/stderr, an approval dialog (`y`/`n`/`a`/`p`/edit
+args), pause/resume checkpoints, and `/plan` streaming with step tracking. The
+frontend is vanilla HTML/CSS/JS and works offline — no CDN. Runs are per-tab;
+all sessions share one SQLite store.
 
 ### REPL commands
 

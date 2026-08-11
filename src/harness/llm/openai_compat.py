@@ -59,7 +59,28 @@ class OpenAICompatProvider:
         self.max_tool_calls = max_tool_calls
         self.retry_attempts = max(1, retry_attempts)
         self.retry_base_delay = retry_base_delay
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        self._api_key = api_key
+        self._base_url = base_url
+        self._timeout = timeout
+        # The client is built lazily: newer openai versions raise
+        # OpenAIError("Missing credentials") at construction, which would crash
+        # the web server (which must boot without a key and surface the error
+        # inside a run). Tests also overwrite ``_client`` with a fake.
+        self._client: AsyncOpenAI | None = None
+
+    @property
+    def _openai(self) -> AsyncOpenAI:
+        if self._client is None:
+            if not self._api_key:
+                raise RuntimeError(
+                    "no API key configured; set DEEPSEEK_API_KEY in .env"
+                )
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                timeout=self._timeout,
+            )
+        return self._client
 
     # -- public Protocol surface --
 
@@ -153,7 +174,7 @@ class OpenAICompatProvider:
         last_exc: Exception | None = None
         for attempt in range(self.retry_attempts):
             try:
-                return await self._client.chat.completions.create(**kwargs)
+                return await self._openai.chat.completions.create(**kwargs)
             except _RETRYABLE as exc:
                 last_exc = exc
                 delay = self.retry_base_delay * (2 ** attempt)

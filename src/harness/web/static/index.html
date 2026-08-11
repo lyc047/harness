@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-phase="connecting">
+
+<aside id="sidebar">
+  <div class="sidebar-header">
+    <span class="brand">harness</span>
+    <button id="new-session" title="New session" aria-label="New session">＋</button>
+  </div>
+  <div id="session-list"></div>
+</aside>
+
+<main id="main">
+  <div id="statusbar">
+    <span id="status-pill" class="pill">connecting…</span>
+    <span id="model-label"></span>
+  </div>
+  <div id="plan-panel" hidden></div>
+  <div id="transcript"></div>
+  <div id="composer">
+    <textarea id="input" rows="1" placeholder="Type a message or /command…"></textarea>
+    <div class="composer-actions">
+      <button id="stop-btn" hidden>Stop</button>
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+</main>
+
+<div id="approval-overlay" class="overlay" hidden>
+  <div class="dialog">
+    <h3 id="approval-title">Approval required</h3>
+    <p class="dialog-hint">y = allow once · n = deny · a = allow for session · p = allow + pause</p>
+    <pre id="approval-args"></pre>
+    <textarea id="approval-edit" rows="8" spellcheck="false" hidden></textarea>
+    <div class="dialog-actions">
+      <button data-decision="y">Allow once</button>
+      <button data-decision="n">Deny</button>
+      <button data-decision="a">Always allow</button>
+      <button data-decision="p">Allow + pause</button>
+      <button id="edit-toggle">Edit args</button>
+      <button id="edit-submit" hidden>Submit edit</button>
+    </div>
+  </div>
+</div>
+
+<div id="pause-overlay" class="overlay" hidden>
+  <div class="dialog">
+    <h3>⏸ Run paused</h3>
+    <p id="pause-info"></p>
+    <div class="dialog-actions">
+      <button id="resume-btn">Resume</button>
+      <button id="dismiss-pause-btn">Dismiss</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/markdown.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

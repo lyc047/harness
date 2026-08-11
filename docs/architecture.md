@@ -11,14 +11,15 @@ tool-call loop. The design mirrors openai-agents-python (Agent/Runner split,
 src/harness/
 ├── config.py            # Settings dataclass (.env / env vars)
 ├── cli/
-│   ├── main.py          # REPL entry: builds agent, tools, approval, sandbox
+│   ├── main.py          # REPL entry + `serve` subcommand (uvicorn factory)
 │   └── commands.py      # /commands (session, tools, plan, permissions, …)
 ├── core/
 │   ├── agent.py         # immutable Agent config (name/instructions/tools/…)
 │   ├── messages.py      # Message/ToolCall + OpenAI wire format (reasoning passthrough)
 │   ├── runner.py        # the turn loop (stateless executor)
 │   ├── run_result.py    # RunResult / RunState / RunPaused
-│   └── hooks.py         # lifecycle callbacks (observability, rendering)
+│   ├── hooks.py         # lifecycle callbacks (observability, rendering)
+│   └── compose.py       # build_core_stack(): the one CLI+web composition point
 ├── llm/
 │   ├── base.py          # LLMProvider protocol + StreamEvent types
 │   ├── openai_compat.py # DeepSeek/OpenAI-compatible (AsyncOpenAI, retries)
@@ -48,6 +49,12 @@ src/harness/
 │   ├── base.py          # SandboxResult / SandboxProvider / SandboxedExecutor
 │   ├── local.py         # local subprocess (dev, NO isolation)
 │   └── remote_ssh.py    # paramiko SSH to a rented server
+├── web/
+│   ├── events.py        # runner/planner events + messages → WS JSON frames
+│   ├── commands.py      # one implementation of every slash command result
+│   ├── runtime.py       # WebApprover + per-connection Runtime (mirrors CLI stack)
+│   ├── server.py        # FastAPI app: REST + /ws + static files
+│   └── static/          # zero-dependency Codex-style frontend (HTML/CSS/JS)
 └── observability/
     ├── logging.py       # structured logging (stdout + rotating file)
     └── tracing.py       # JSONL turn/tool traces
@@ -75,6 +82,40 @@ src/harness/
 Every step emits lifecycle events (the `Hooks` callbacks), which the CLI
 renders and the `Tracer` records as JSONL.
 
+## Web UI (`harness serve`)
+
+A Codex-style browser interface shares the exact same core stack as the CLI
+(`core/compose.py::build_core_stack`), so behaviour cannot drift between
+surfaces.
+
+```
+browser (vanilla JS SPA) ⇄ FastAPI/uvicorn ⇄ per-connection Runtime ⇄ Runner/Approval/Planner
+                                   ⇄ single shared Store (SQLite, WAL)
+```
+
+- **One process owns one `Store`** (created in the app lifespan, shared by REST
+  and every WebSocket). Each connection gets its own stateful `Runtime` — agent,
+  runner, approval, planner — built the same way the CLI builds its stack, so a
+  tab behaves like an independent REPL session. `PRAGMA busy_timeout=5000` on
+  the session/preference stores absorbs concurrent multi-tab writes.
+- **REST = instant operations** (`/api/sessions`, messages, tools, skills,
+  permissions, checkpoints, help). **WS = streaming runs** (`message`, `plan`,
+  approval decisions, pause/resume, cancel, `command`). Frames are serialized in
+  one place (`web/events.py::serialize_event`) so the CLI, WS and REST history
+  all agree on the wire shape.
+- **`WebApprover`** implements the approval prompt: it pushes an
+  `approval_required` frame to the outbox, then awaits a decision from a queue
+  the WS receive loop fills. Timeout fails closed (`"n"`); stale decisions from
+  a cancelled run are drained before the next one starts.
+- **Cancellation** — a new `message`/`plan`/`cancel`/disconnect cancels the
+  previous run task. The run tasks convert `RunPaused` into a checkpoint +
+  `paused` frame, `MaxTurnsExceeded`/exceptions into `run_error`.
+- **Frontend** is four hand-written files (no build step, no CDN): a markdown
+  renderer that is escape-first (`escapeHtml` before any inline/block transform,
+  `safeUrl` whitelisting http/https) so model/tool text is never injected as
+  HTML; tool-call cards keyed by `tool_call.id`; an approval dialog
+  (`y`/`n`/`a`/`p`/edit); pause/resume overlay; session sidebar; `/plan` panel.
+
 ## Design principles
 
 - **Agent is config, Runner is stateless.** State flows through explicit
@@ -93,6 +134,9 @@ renders and the `Tracer` records as JSONL.
 - **New sandbox** — implement `SandboxProvider.run_command/check_available`,
   then add a branch in `sandbox/__init__.py:build_sandbox`.
 - **New slash command** — add a branch in `cli/commands.py:handle_command`.
+- **New WS frame type** — extend `web/events.py::serialize_event` (server → client)
+  and `web/server.py::_dispatch` (client → server); the frontend switch in
+  `static/js/app.js` handles it in one place.
 - **Observability** — add a field to `core/hooks.py` `Hooks` and wire it in the
   runner; the `Tracer` and the CLI both consume hooks, so a new hook appears in
   both places automatically.

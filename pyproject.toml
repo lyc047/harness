@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "aiosqlite>=0.22.1",
+    "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "mcp>=2.0.0",
     "openai>=2.53.0",
@@ -16,6 +17,8 @@ dependencies = [
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
+    "uvicorn[standard]>=0.52.1",
+    "websockets>=17.0.1",
 ]
 
 [project.scripts]
