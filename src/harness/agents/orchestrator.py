@@ -8,12 +8,14 @@ so the parent sees the subagent's answer like any other tool outcome.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from harness.agents.subagent import Subagent
 from harness.core.agent import Agent
 from harness.core.run_result import MaxTurnsExceeded
-from harness.core.runner import Runner
+from harness.core.runner import RunDone, Runner
 from harness.observability.logging import get_logger
 from harness.tools.base import Tool, ToolResult
 
@@ -83,8 +85,31 @@ def _compose_brief(
     return "\n\n".join(parts)
 
 
+@dataclass
+class SubagentRunStart:
+    """Marker for the start of a nested subagent run (event-sink hook).
+
+    Delivered to a ``SubagentTool``'s ``on_event`` sink so observers (the web
+    runtime) can bracket the subagent's turns/tools as a nested run view.
+    """
+
+
+@dataclass
+class SubagentRunEnd:
+    """Marker for the end of a nested subagent run (event-sink hook)."""
+
+    output: str = ""
+    turns: int = 0
+    is_error: bool = False
+
+
 class SubagentTool(Tool):
-    """Runs a :class:`Subagent` in isolation and returns its final output."""
+    """Runs a :class:`Subagent` in isolation and returns its final output.
+
+    When ``on_event`` is set, the run streams through it (instead of being
+    swallowed by ``Runner.run``): every event of the nested run is forwarded
+    to the sink, bracketed by :class:`SubagentRunStart`/``SubagentRunEnd``.
+    """
 
     def __init__(
         self,
@@ -94,6 +119,7 @@ class SubagentTool(Tool):
         subagent: Subagent,
         runner: Runner,
         model: str,
+        on_event: Callable[[str, object], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -134,6 +160,7 @@ class SubagentTool(Tool):
         self.subagent = subagent
         self._runner = runner
         self._model = model
+        self._on_event = on_event
 
     async def invoke(self, **kwargs: Any) -> ToolResult:
         task = str(kwargs.get("task") or kwargs.get("prompt") or "").strip()
@@ -147,26 +174,51 @@ class SubagentTool(Tool):
             constraints=str(kwargs.get("constraints") or "").strip(),
             expected_output=str(kwargs.get("expected_output") or "").strip(),
         )
+        agent = self.subagent.as_agent(model=self._model)
+        if self._on_event is not None:
+            await self._on_event(self.subagent.name, SubagentRunStart())
+        # Stream the nested run; when a sink is attached, forward every event
+        # so the UI can render the subagent's own turns/tools in place. Without
+        # a sink the events are dropped and we only keep the final output —
+        # identical to the old ``Runner.run`` path.
+        output = "(subagent returned no output)"
+        turns = 0
+        is_error = False
         try:
-            result = await self._runner.run(
-                self.subagent.as_agent(model=self._model), brief, session_id=None
-            )
+            async for event in self._runner.run_streamed(agent, brief, session_id=None):
+                if self._on_event is not None and not isinstance(event, RunDone):
+                    await self._on_event(self.subagent.name, event)
+                if isinstance(event, RunDone):
+                    result = event.result
+                    output = result.final_output or output
+                    turns = result.turns
         except MaxTurnsExceeded as exc:
             # A delegate burning its turn budget must not crash the parent run;
             # surface it as a tool error the parent can react to.
             logger.warning("subagent %r hit %s", self.subagent.name, exc)
-            return ToolResult.error(str(exc), agent=self.subagent.name)
+            output = str(exc)
+            is_error = True
         except Exception as exc:  # noqa: BLE001 — same: degrade, don't propagate
             logger.warning("subagent %r raised %s: %s", self.subagent.name, type(exc).__name__, exc)
-            return ToolResult.error(
-                f"{type(exc).__name__}: {exc}", agent=self.subagent.name
+            output = f"{type(exc).__name__}: {exc}"
+            is_error = True
+        if self._on_event is not None:
+            await self._on_event(
+                self.subagent.name, SubagentRunEnd(output=output, turns=turns, is_error=is_error)
             )
-        output = result.final_output or "(subagent returned no output)"
-        logger.info("subagent %r completed in %d turns", self.subagent.name, result.turns)
-        return ToolResult.ok(output, agent=self.subagent.name, turns=result.turns)
+        if is_error:
+            return ToolResult.error(output, agent=self.subagent.name)
+        logger.info("subagent %r completed in %d turns", self.subagent.name, turns)
+        return ToolResult.ok(output, agent=self.subagent.name, turns=turns)
 
 
-def subagent_as_tool(subagent: Subagent, runner: Runner, default_model: str) -> Tool:
+def subagent_as_tool(
+    subagent: Subagent,
+    runner: Runner,
+    default_model: str,
+    *,
+    on_event: Callable[[str, object], Awaitable[None]] | None = None,
+) -> Tool:
     """Wrap a Subagent as a Tool the parent agent can call."""
     description = subagent.description or f"Delegate a subtask to the {subagent.name} subagent."
     return SubagentTool(
@@ -175,6 +227,7 @@ def subagent_as_tool(subagent: Subagent, runner: Runner, default_model: str) -> 
         subagent=subagent,
         runner=runner,
         model=subagent.model or default_model,
+        on_event=on_event,
     )
 
 
@@ -184,16 +237,18 @@ def add_subagents(
     subagents: list[Subagent],
     *,
     default_model: str | None = None,
+    on_event: Callable[[str, object], Awaitable[None]] | None = None,
 ) -> None:
     """Register every subagent as a delegation tool on ``agent``.
 
     ``default_model`` is the model subagents inherit (a configured cheaper
     tier); it falls back to the parent agent's model when unset. A subagent's
-    own ``model`` field still wins over both.
+    own ``model`` field still wins over both. ``on_event`` (if given) receives
+    every event of each nested subagent run, bracketed by the run markers.
     """
     base = default_model or agent.model
     for sa in subagents:
-        agent.tools.register(subagent_as_tool(sa, runner, base))
+        agent.tools.register(subagent_as_tool(sa, runner, base, on_event=on_event))
 
 
 def attach_delegation_protocol(agent: Agent) -> None:

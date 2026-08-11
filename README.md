@@ -113,6 +113,28 @@ REST + WS API (all `json`):
 | `/mcp add|list|remove` | manage MCP servers |
 | `/exit` | quit |
 
+### Subagents
+
+`--subagents` turns the agent into a **manager**: it delegates matched work to
+specialized subagents (researcher / coder / frontend_design / doc_writer /
+search / file_handler) via `delegate_to_<name>` tools instead of doing it
+itself. Each subagent runs **in isolation** — its own instructions, tools,
+history and (optionally) a cheaper model — and returns a structured delivery
+(`WHAT YOU DID` / `KEY FINDINGS` / `RECOMMENDED NEXT STEP` / `GAPS`, with large
+deliverables saved to a file), which the parent verifies against the brief.
+
+- **Declarative registry**: subagents are YAML configs, not Python. The six
+  defaults ship in `src/harness/skills/bundled/subagents/*.yaml`; drop a
+  same-named file in `skills/subagents/*.yaml` to override, or a brand-new one
+  to add a subagent — zero code changes.
+- **Model tiering**: set `HARNESS_SUBAGENT_MODEL` to give delegates a cheaper
+  tier (the provider now honors `agent.model` per request); a subagent's own
+  `model:` field wins, unset inherits the parent.
+- **Web run view**: with `serve --subagents`, each delegated run renders as a
+  nested card inside the parent bubble — the subagent's own thinking, tool
+  calls and results stream into it, and its tool approvals flow through the
+  same approval dialog as the parent's.
+
 ### Approval & sandbox
 
 Dangerous tool calls ask for human approval (`y` / `n` / `a` / `e` / `p`)

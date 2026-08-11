@@ -8,7 +8,7 @@ only have to be wired in one place).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,7 +51,12 @@ def default_agent(settings: Settings) -> Agent:
     )
 
 
-def add_example_subagents(stack: CoreStack, *, subagent_model: str = "") -> None:
+def add_example_subagents(
+    stack: CoreStack,
+    *,
+    subagent_model: str = "",
+    on_event: Callable[[str, object], Awaitable[None]] | None = None,
+) -> None:
     """Register the built-in researcher/coder subagents as delegate tools.
 
     One implementation shared by the CLI (``--subagents``), the web runtime and
@@ -59,6 +64,8 @@ def add_example_subagents(stack: CoreStack, *, subagent_model: str = "") -> None
     Lazy imports keep the ``agents`` package out of the hot composition path.
     ``subagent_model`` is the cheaper model subagents inherit when set
     (``HARNESS_SUBAGENT_MODEL``); empty means they use the parent's model.
+    ``on_event`` (if given) is forwarded the events of each nested subagent run
+    so a caller can render the subagent's turns/tools (web run view).
     """
     from harness.agents.examples import example_subagents
     from harness.agents.orchestrator import add_subagents, attach_delegation_protocol
@@ -68,6 +75,7 @@ def add_example_subagents(stack: CoreStack, *, subagent_model: str = "") -> None
         stack.runner,
         example_subagents(),
         default_model=subagent_model or None,
+        on_event=on_event,
     )
     # Tell the parent to write self-contained delegation briefs, so isolated
     # subagents (which can't see the conversation) get the context they need.

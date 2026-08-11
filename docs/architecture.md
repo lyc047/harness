@@ -36,7 +36,10 @@ src/harness/
 │   └── store.py         # Store facade (sessions + preferences)
 ├── agents/
 │   ├── subagent.py      # sub-agent config + context isolation
-│   └── orchestrator.py  # manager pattern: sub-agents exposed as tools
+│   ├── registry.py      # YAML subagent registry (bundled + runtime override)
+│   └── orchestrator.py  # manager pattern: sub-agents exposed as tools;
+│                        #   per-subagent model tiering + run-event sink
+│                        #   (the web renders nested subagent runs)
 ├── planning/
 │   ├── planner.py       # plan generation from a task
 │   └── executor.py      # step execution + revision (planning_interval)

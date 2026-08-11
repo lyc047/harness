@@ -628,6 +628,73 @@ async def test_runtime_subagent_tool_runs_isolated_session(
     await store.close()
 
 
+async def test_runtime_subagent_events_forwarded(make_provider, tmp_path) -> None:
+    """A delegated subagent's own turns stream into the parent's run as nested
+    subagent_start/subagent_event/subagent_end frames, so the web can render a
+    subagent view (its own tool calls and results) inside the parent bubble."""
+    target = tmp_path / "note.txt"
+    target.write_text("hello", encoding="utf-8")
+    script = [
+        # parent turn 1 -> hand off to the researcher
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="p1",
+                    name="delegate_to_researcher",
+                    arguments='{"task": "research something"}',
+                )
+            ]
+        ),
+        # subagent turn 1 -> reads a file (ALLOW policy, no approval prompt)
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="s1",
+                    name="read_file",
+                    arguments=json.dumps({"path": str(target)}),
+                )
+            ]
+        ),
+        # subagent turn 2 -> structured delivery
+        LLMResponse(final_text="subagent result"),
+        # parent turn 2 -> wraps up
+        LLMResponse(final_text="parent done"),
+    ]
+    rt, store = await _make_runtime(
+        tmp_path, make_provider, script, HARNESS_SUBAGENTS="1"
+    )
+    rt.start_run("research something")
+    rt.decisions.put_nowait("y")  # approve the hand-off only
+    frames = await _collect_frames(rt, until="run_done")
+    types = [f["type"] for f in frames]
+    assert "subagent_start" in types
+    assert "subagent_end" in types
+
+    start = next(f for f in frames if f["type"] == "subagent_start")
+    assert start["agent"] == "researcher"
+
+    sub_events = [f for f in frames if f["type"] == "subagent_event"]
+    ev_types = [f["event"]["type"] for f in sub_events]
+    assert "tool_call" in ev_types
+    assert "tool_result" in ev_types
+    tool_call_ev = next(
+        f["event"] for f in sub_events if f["event"]["type"] == "tool_call"
+    )
+    assert tool_call_ev["tool_call"]["name"] == "read_file"
+    tool_result_ev = next(
+        f["event"] for f in sub_events if f["event"]["type"] == "tool_result"
+    )
+    assert "hello" in tool_result_ev["content"]
+
+    end = next(f for f in frames if f["type"] == "subagent_end")
+    assert end["agent"] == "researcher"
+    assert end["output"] == "subagent result"
+    assert end["turns"] == 2
+    assert end["is_error"] is False
+    await rt.shutdown()
+    await store.close()
+
+
 # ---- Runtime: permission modes ---- #
 
 

@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from harness.agents.orchestrator import SubagentRunEnd, SubagentRunStart
 from harness.config import Settings
 from harness.core.compose import CoreStack, add_example_subagents, build_core_stack
 from harness.core.messages import Message, ToolCall
@@ -154,10 +155,40 @@ class Runtime:
         Delegation tools land under the default ASK policy, so the user approves
         each hand-off (and the subagent's own tool calls) in the web dialog.
         ``HARNESS_SUBAGENT_MODEL`` lets subagents use a cheaper model tier.
+        Every nested subagent run is forwarded to the client as
+        ``subagent_start``/``subagent_event``/``subagent_end`` frames so the UI
+        can render the subagent's own turns and tools inline.
         """
         add_example_subagents(
-            self.stack, subagent_model=self._settings.subagent_model
+            self.stack,
+            subagent_model=self._settings.subagent_model,
+            on_event=self._forward_subagent_event,
         )
+
+    async def _forward_subagent_event(self, agent: str, event: object) -> None:
+        """Forward a nested subagent run's event to the client.
+
+        The subagent's stream events are wrapped with the agent name so the UI
+        can route them into the right card; the run markers bracket the view.
+        """
+        if isinstance(event, SubagentRunStart):
+            await self._emit({"type": "subagent_start", "agent": agent})
+        elif isinstance(event, SubagentRunEnd):
+            await self._emit(
+                {
+                    "type": "subagent_end",
+                    "agent": agent,
+                    "output": event.output,
+                    "turns": event.turns,
+                    "is_error": event.is_error,
+                }
+            )
+        else:
+            frame = serialize_event(event)
+            if frame is not None:
+                await self._emit(
+                    {"type": "subagent_event", "agent": agent, "event": frame}
+                )
 
     @property
     def stack(self) -> CoreStack:

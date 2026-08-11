@@ -575,12 +575,12 @@ class _ReasoningProvider:
         self._script = script
 
     async def complete(
-        self, messages: object, *, tools: object = None
+        self, messages: object, *, tools: object = None, model: object = None
     ) -> LLMResponse:
-        events = [e async for e in self.stream(messages, tools=tools)]  # type: ignore[arg-type]
+        events = [e async for e in self.stream(messages, tools=tools, model=model)]  # type: ignore[arg-type]
         return next(e.response for e in events if isinstance(e, StreamEnd))
 
-    async def stream(self, messages: object, *, tools: object = None):  # type: ignore[no-untyped-def]
+    async def stream(self, messages: object, *, tools: object = None, model: object = None):  # type: ignore[no-untyped-def]
         response = (
             self._script.pop(0) if self._script else LLMResponse(final_text="(no script)")
         )

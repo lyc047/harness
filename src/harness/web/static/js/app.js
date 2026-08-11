@@ -48,6 +48,7 @@
   };
 
   let toolCards = {};         // tool_call.id -> { el, output, status }
+  let subagentStack = [];     // open nested subagent runs, innermost last
   let rafPending = false;
 
   // ---------------------------------------------------------------- phase
@@ -222,12 +223,15 @@
 
   // ---------------------------------------------------------------- tool cards
 
+  function argsOf(tc) {
+    try { return JSON.parse(tc.arguments || '{}'); } catch (e) { return {}; }
+  }
+
   function createToolCard(tc) {
     const parent = state.lastAssistantEl;
     if (!parent) return;
 
-    let args;
-    try { args = JSON.parse(tc.arguments || '{}'); } catch (e) { args = {}; }
+    const args = argsOf(tc);
     let title;
     if (tc.name === 'bash') {
       title = '$ ' + (args.command || '');
@@ -278,8 +282,18 @@
     }
   }
 
+  function findToolCard(id) {
+    // approval/decision frames only carry the tool_call id; look in the parent
+    // cards first, then any open subagent run's scoped card map
+    if (toolCards[id]) return toolCards[id];
+    for (let i = subagentStack.length - 1; i >= 0; i--) {
+      if (subagentStack[i].tools[id]) return subagentStack[i].tools[id];
+    }
+    return null;
+  }
+
   function markAwaitingApproval(id) {
-    const card = toolCards[id];
+    const card = findToolCard(id);
     if (card && card.status === 'running') {
       card.status = 'awaiting_approval';
       card.el.dataset.state = 'awaiting_approval';
@@ -287,11 +301,170 @@
   }
 
   function markRunning(id) {
-    const card = toolCards[id];
+    const card = findToolCard(id);
     if (card && card.status === 'awaiting_approval') {
       card.status = 'running';
       card.el.dataset.state = 'running';
     }
+  }
+
+  // ---------------------------------------------------------------- subagent run view
+
+  function startSubagentRun(name) {
+    const parent = state.lastAssistantEl;
+    if (!parent) return;
+    const card = document.createElement('div');
+    card.className = 'subagent-run';
+    card.dataset.state = 'running';
+
+    const header = document.createElement('div');
+    header.className = 'subagent-header';
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    const title = document.createElement('span');
+    title.className = 'subagent-title';
+    title.textContent = 'subagent: ' + name;
+    header.appendChild(spinner);
+    header.appendChild(title);
+
+    const body = document.createElement('div');
+    body.className = 'subagent-body';
+
+    card.appendChild(header);
+    card.appendChild(body);
+    parent.appendChild(card);
+
+    subagentStack.push({
+      name: name,
+      el: card,
+      body: body,
+      text: '',
+      textEl: null,
+      reasoning: '',
+      reasoningEl: null,
+      tools: {},
+    });
+    scrollBottom();
+  }
+
+  function routeSubagentEvent(name, ev) {
+    // events arrive depth-first; find the innermost open run for this agent
+    let run = null;
+    for (let i = subagentStack.length - 1; i >= 0; i--) {
+      if (subagentStack[i].name === name) { run = subagentStack[i]; break; }
+    }
+    if (!run) return;
+
+    if (ev.type === 'text') {
+      if (!run.textEl) {
+        run.textEl = document.createElement('div');
+        run.textEl.className = 'subagent-text';
+        run.body.appendChild(run.textEl);
+      }
+      run.text += ev.text;
+      run.textEl.textContent = run.text; // plain text — the delivery is one-shot
+    } else if (ev.type === 'reasoning') {
+      if (!run.reasoningEl) {
+        run.reasoningEl = document.createElement('details');
+        run.reasoningEl.className = 'reasoning';
+        run.reasoningEl.open = true;
+        const summary = document.createElement('summary');
+        summary.textContent = 'Thoughts';
+        const pre = document.createElement('pre');
+        run.reasoningEl.appendChild(summary);
+        run.reasoningEl.appendChild(pre);
+        run.body.appendChild(run.reasoningEl);
+      }
+      run.reasoning += ev.text;
+      run.reasoningEl.querySelector('pre').textContent = run.reasoning;
+    } else if (ev.type === 'tool_call') {
+      createSubagentToolCard(run, ev.tool_call);
+    } else if (ev.type === 'tool_result') {
+      const card = run.tools[ev.tool_call_id];
+      if (card) {
+        card.status = ev.is_error ? 'error' : 'done';
+        card.el.dataset.state = card.status;
+        card.output.textContent =
+          ev.content + (ev.truncated ? '\n…(output truncated)' : '');
+        if (ev.is_error) {
+          card.el.querySelector('.tool-card-output').open = true;
+        }
+      }
+    }
+    scrollBottom();
+  }
+
+  function createSubagentToolCard(run, tc) {
+    const el = document.createElement('div');
+    el.className = 'tool-card subagent-tool-card';
+    el.dataset.state = 'running';
+
+    const header = document.createElement('div');
+    header.className = 'tool-card-header';
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    const title = document.createElement('span');
+    title.className = 'tool-card-title';
+    title.textContent = tc.name + ' ' + JSON.stringify(argsOf(tc));
+    header.appendChild(spinner);
+    header.appendChild(title);
+
+    const output = document.createElement('details');
+    output.className = 'tool-card-output';
+    const summary = document.createElement('summary');
+    summary.textContent = 'output';
+    const pre = document.createElement('pre');
+    output.appendChild(summary);
+    output.appendChild(pre);
+
+    el.appendChild(header);
+    el.appendChild(output);
+    run.body.appendChild(el);
+
+    // scoped per-run map, not the global toolCards — subagent tool_call ids
+    // would collide with the parent's (both start at "t1" in tests/real runs)
+    run.tools[tc.id] = { el: el, output: pre, status: 'running' };
+  }
+
+  function closeStaleSubagents() {
+    if (!subagentStack.length) return;
+    subagentStack.forEach(function (run) {
+      const spinner = run.el.querySelector('.subagent-header .spinner');
+      if (spinner) spinner.remove();
+      run.el.dataset.state = 'error';
+    });
+    subagentStack = [];
+  }
+
+  function endSubagentRun(msg) {
+    // close the innermost open run with this name
+    let idx = -1;
+    for (let i = subagentStack.length - 1; i >= 0; i--) {
+      if (subagentStack[i].name === msg.agent) { idx = i; break; }
+    }
+    if (idx === -1) return;
+    const run = subagentStack[idx];
+    subagentStack.splice(idx, 1);
+
+    const spinner = run.el.querySelector('.subagent-header .spinner');
+    if (spinner) spinner.remove();
+    const status = document.createElement('span');
+    status.className = 'subagent-status';
+    status.textContent = (msg.is_error ? '✗ ' : '✓ ') + msg.turns + ' turn' + (msg.turns === 1 ? '' : 's');
+    run.el.querySelector('.subagent-header').appendChild(status);
+    run.el.dataset.state = msg.is_error ? 'error' : 'done';
+
+    // the final output is usually already streamed as text; only show it when
+    // the run produced none (e.g. it ended on an error before any text)
+    if (msg.output && !run.text) {
+      if (!run.textEl) {
+        run.textEl = document.createElement('div');
+        run.textEl.className = 'subagent-text';
+        run.body.appendChild(run.textEl);
+      }
+      run.textEl.textContent = msg.output;
+    }
+    scrollBottom();
   }
 
   // ---------------------------------------------------------------- approval dialog
@@ -503,6 +676,7 @@
   function clearTranscript() {
     els.transcript.innerHTML = '';
     toolCards = {};
+    subagentStack = [];
     state.currentAssistant = null;
     state.lastAssistantEl = null;
     state.steps = [];
@@ -650,6 +824,9 @@
         setPhase('idle');
         break;
       case 'run_started':
+        // a fresh run: any subagent cards still open (from a cancelled or
+        // errored prior run) are stale — detach them so events can't leak in
+        closeStaleSubagents();
         break; // bubble was already created optimistically on send
       case 'text':
         appendAssistantText(msg.text);
@@ -662,6 +839,15 @@
         break;
       case 'tool_result':
         updateToolCard(msg.tool_call_id, msg);
+        break;
+      case 'subagent_start':
+        startSubagentRun(msg.agent);
+        break;
+      case 'subagent_event':
+        routeSubagentEvent(msg.agent, msg.event);
+        break;
+      case 'subagent_end':
+        endSubagentRun(msg);
         break;
       case 'approval_required':
         openApprovalDialog(msg.tool_call);

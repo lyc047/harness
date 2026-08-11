@@ -365,6 +365,43 @@ body[data-phase="connecting"] .pill { color: var(--text-dim); animation: pulse 1
 }
 .tool-card[data-state="error"] .tool-card-output pre { color: var(--red); }
 
+/* ---------- subagent run view ---------- */
+
+.subagent-run {
+  margin: 8px 0 8px 12px;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: 8px;
+  background: rgba(88, 166, 255, 0.06);
+  padding: 4px 0;
+  max-width: 82%;
+}
+.subagent-run[data-state="error"] { border-left-color: var(--red); }
+.subagent-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.subagent-title { font-weight: 600; color: var(--accent); }
+.subagent-status { color: var(--text-dim); font-size: 11.5px; }
+.subagent-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 10px 6px 10px;
+}
+.subagent-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.subagent-tool-card { max-width: 100%; }
+
 /* ---------- plan panel ---------- */
 
 #plan-panel {
