@@ -51,6 +51,10 @@ returns, check the delivery against `expected_output`; if a required part is
 missing, either call the same subagent again with a focused follow-up task, or
 state the gap in your answer. If the delivery references files, read them
 before judging the result — don't judge from the summary alone.
+
+If the delivery includes a RECOMMENDED NEXT STEP (a file to read, a subagent
+to hand off to), treat it as advice — you are the router and you decide. Act
+on it if it serves the user's goal; ignore or redirect it if it doesn't.
 """
 
 

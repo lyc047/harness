@@ -122,10 +122,12 @@ def _with_skill(instructions: str, skill_name: str) -> str:
 DELIVERY_CONTRACT = """\
 ## Delivery contract
 
-Return your final message as plain text with three parts:
+Return your final message as plain text with four parts:
 1. WHAT YOU DID — the actual steps (files read, commands run).
 2. KEY FINDINGS / RESULT — the substantive answer, with file paths.
-3. GAPS — anything you could not determine, or open questions.
+3. RECOMMENDED NEXT STEP — what you would do next if you could: a file to
+   read, a subagent to hand off to (name it), or "none — task complete".
+4. GAPS — anything you could not determine, or open questions.
 
 Keep it under 200 words unless the task asks for more. If the deliverable is
 too big to fit in the reply (over ~200 words), SAVE IT TO A FILE and return

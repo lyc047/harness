@@ -87,6 +87,36 @@ async def test_parent_delegates_to_subagent(make_provider) -> None:
     assert len(result.messages) == 5
 
 
+async def test_parent_routes_to_second_subagent(make_provider) -> None:
+    """After one subagent delivers, the parent can hand off to a different one —
+    the collaboration is parent-routed (the parent reads RECOMMENDED NEXT STEP
+    and decides), not a subagent-to-subagent message."""
+    script = [
+        LLMResponse(
+            tool_calls=[ToolCall(id="t1", name="delegate_to_a", arguments='{"task": "research"}')]
+        ),
+        # subagent a delivers, suggesting the next step
+        LLMResponse(final_text="KEY FINDINGS: x. RECOMMENDED NEXT STEP: delegate to b."),
+        # the parent follows the suggestion and delegates to a second subagent
+        LLMResponse(
+            tool_calls=[ToolCall(id="t2", name="delegate_to_b", arguments='{"task": "implement"}')]
+        ),
+        LLMResponse(final_text="B done"),
+        LLMResponse(final_text="final answer"),
+    ]
+    provider = make_provider(script)
+    agent = Agent(name="parent", instructions="parent", model="m")
+    runner = Runner(provider)
+    add_subagents(agent, runner, [_subagent("a"), _subagent("b")])
+
+    result = await runner.run(agent, "Do it", session_id=None)
+    assert result.final_output == "final answer"
+
+    # both delegates ran, in handoff order; subagent runs stay isolated
+    called = [tc.name for m in result.messages for tc in (m.tool_calls or [])]
+    assert called == ["delegate_to_a", "delegate_to_b"]
+
+
 async def test_subagent_tool_missing_task_is_error(make_provider) -> None:
     provider = make_provider()
     runner = Runner(provider)
@@ -216,6 +246,8 @@ def test_delegation_protocol_attached_to_parent() -> None:
     assert "by default" in agent.instructions
     # the parent reads files the delivery references before judging the result
     assert "before judging the result" in agent.instructions
+    # the parent decides on the subagent's RECOMMENDED NEXT STEP (router role)
+    assert "router" in agent.instructions
 
 
 def test_subagents_carry_delivery_contract() -> None:
@@ -225,7 +257,7 @@ def test_subagents_carry_delivery_contract() -> None:
     from harness.agents.examples import example_subagents
 
     for sa in example_subagents():
-        for marker in ("WHAT YOU DID", "KEY FINDINGS", "GAPS"):
+        for marker in ("WHAT YOU DID", "KEY FINDINGS", "RECOMMENDED NEXT STEP", "GAPS"):
             assert marker in sa.instructions, f"{sa.name} missing {marker!r}"
         # large deliverables are written to disk and referenced by path, not
         # pasted into the reply (keeps the parent's context clean)
