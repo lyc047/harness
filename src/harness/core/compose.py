@@ -50,6 +50,19 @@ def default_agent(settings: Settings) -> Agent:
     )
 
 
+def add_example_subagents(stack: CoreStack) -> None:
+    """Register the built-in researcher/coder subagents as delegate tools.
+
+    One implementation shared by the CLI (``--subagents``), the web runtime and
+    the web REST read stack, so every surface exposes the same delegation tools.
+    Lazy imports keep the ``agents`` package out of the hot composition path.
+    """
+    from harness.agents.examples import example_subagents
+    from harness.agents.orchestrator import add_subagents
+
+    add_subagents(stack.agent, stack.runner, example_subagents())
+
+
 def load_permissions(settings: Settings) -> Permissions:
     """Load the TOML policy file, falling back to safe defaults."""
     path = Path(settings.permissions_file)

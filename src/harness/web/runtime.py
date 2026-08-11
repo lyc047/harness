@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from harness.config import Settings
-from harness.core.compose import CoreStack, build_core_stack
+from harness.core.compose import CoreStack, add_example_subagents, build_core_stack
 from harness.core.messages import ToolCall
 from harness.core.run_result import MaxTurnsExceeded, RunPaused, RunState
 from harness.core.runner import ToolExecutor
@@ -131,16 +131,10 @@ class Runtime:
     def _enable_subagents(self) -> None:
         """Register the researcher/coder delegate tools on the agent.
 
-        Mirrors the CLI's ``--subagents`` path: the same SubagentTool objects,
-        so the two surfaces share one implementation of multi-agent delegation.
-        Delegate tools land under the default ASK policy, so the user approves
+        Delegation tools land under the default ASK policy, so the user approves
         each hand-off (and the subagent's own tool calls) in the web dialog.
         """
-        from harness.agents.examples import example_subagents
-        from harness.agents.orchestrator import add_subagents
-
-        stack = self.stack
-        add_subagents(stack.agent, stack.runner, example_subagents())
+        add_example_subagents(self.stack)
 
     @property
     def stack(self) -> CoreStack:

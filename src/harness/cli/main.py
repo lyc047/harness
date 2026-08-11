@@ -167,10 +167,9 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     mcp = MCPClientManager()
 
     if args.subagents:
-        from harness.agents.examples import example_subagents
-        from harness.agents.orchestrator import add_subagents
+        from harness.core.compose import add_example_subagents
 
-        add_subagents(agent, runner, example_subagents())
+        add_example_subagents(stack)
         console.print(
             "[dim]subagents enabled: delegate_to_researcher, delegate_to_coder[/]"
         )

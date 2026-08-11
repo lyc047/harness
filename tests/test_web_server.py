@@ -21,14 +21,14 @@ from harness.web.runtime import Runtime, build_runtime
 from harness.web.server import create_app
 
 
-def _settings(tmp_path: object) -> Settings:
-    return Settings.from_env(
-        {
-            "HARNESS_DB_PATH": str(tmp_path / "harness.db"),  # type: ignore[operator]
-            "HARNESS_SKILLS_DIR": str(tmp_path / "skills"),  # type: ignore[operator]
-            "HARNESS_PERMISSIONS_FILE": str(tmp_path / "nonexistent.toml"),  # type: ignore[operator]
-        }
-    )
+def _settings(tmp_path: object, **env: str) -> Settings:
+    base = {
+        "HARNESS_DB_PATH": str(tmp_path / "harness.db"),  # type: ignore[operator]
+        "HARNESS_SKILLS_DIR": str(tmp_path / "skills"),  # type: ignore[operator]
+        "HARNESS_PERMISSIONS_FILE": str(tmp_path / "nonexistent.toml"),  # type: ignore[operator]
+    }
+    base.update(env)
+    return Settings.from_env(base)
 
 
 def _make_factory(
@@ -67,8 +67,9 @@ def _client(
     make_provider: object,
     script: list[LLMResponse] | None = None,
     tool_executor: ToolExecutor | None = None,
+    **env: str,
 ) -> TestClient:
-    settings = _settings(tmp_path)
+    settings = _settings(tmp_path, **env)
     store = Store(settings)
     app = create_app(
         settings,
@@ -153,6 +154,20 @@ def test_rest_tools_skills_permissions_help(tmp_path, make_provider) -> None:
 
         checkpoints = client.get("/api/checkpoints").json()
         assert checkpoints["checkpoints"] == []
+
+
+def test_rest_tools_reflect_subagents_setting(tmp_path, make_provider) -> None:
+    # Default: no delegate tools.
+    with _client(tmp_path, make_provider) as client:
+        names = [t["name"] for t in client.get("/api/tools").json()["tools"]]
+        assert "delegate_to_researcher" not in names
+        assert "delegate_to_coder" not in names
+
+    # HARNESS_SUBAGENTS=1: the REST tools view shows the delegation tools too.
+    with _client(tmp_path, make_provider, HARNESS_SUBAGENTS="1") as client:
+        names = [t["name"] for t in client.get("/api/tools").json()["tools"]]
+        assert "delegate_to_researcher" in names
+        assert "delegate_to_coder" in names
 
 
 # --------------------------------------------------------------------------

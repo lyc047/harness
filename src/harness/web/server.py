@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from harness.config import Settings
-from harness.core.compose import build_core_stack
+from harness.core.compose import add_example_subagents, build_core_stack
 from harness.memory.store import Store
 from harness.web import commands
 from harness.web.events import serialize_messages
@@ -50,6 +50,8 @@ def create_app(
         await st.initialize()
         # One read-only stack shared by the stateless REST reads.
         read_ctx = await build_core_stack(s, store=st, prompt=None)
+        if s.subagents:
+            add_example_subagents(read_ctx)
         app.state.settings = s
         app.state.store = st
         app.state.read_ctx = read_ctx
