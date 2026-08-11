@@ -69,13 +69,18 @@ class Permissions:
 
     @classmethod
     def default_harness(cls) -> Permissions:
-        """Safe-by-default policy: read-only tools allowed, everything else asks."""
+        """Safe-by-default policy: read-only tools allowed, everything else asks.
+
+        Rule names match the builtin tools exactly (``glob_files`` /
+        ``grep_files``, not the shorthand ``glob`` / ``grep`` — fnmatch without
+        a wildcard is an exact match, so the shorthand never matched).
+        """
         return cls(
             default=Permission.ASK,
             rules=[
                 Rule("read_file", Permission.ALLOW),
-                Rule("glob", Permission.ALLOW),
-                Rule("grep", Permission.ALLOW),
+                Rule("glob_files", Permission.ALLOW),
+                Rule("grep_files", Permission.ALLOW),
             ],
         )
 

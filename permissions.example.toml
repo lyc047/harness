@@ -14,11 +14,11 @@ tool = "read_file"
 permission = "allow"
 
 [[rules]]
-tool = "glob"
+tool = "glob_files"
 permission = "allow"
 
 [[rules]]
-tool = "grep"
+tool = "grep_files"
 permission = "allow"
 
 # Interactive approval for shell and writes.

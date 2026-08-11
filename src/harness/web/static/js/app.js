@@ -150,6 +150,7 @@
     if (!msg.reasoningEl) {
       msg.reasoningEl = document.createElement('details');
       msg.reasoningEl.className = 'reasoning';
+      msg.reasoningEl.open = true; // auto-open: show the model's thinking while it works
       const summary = document.createElement('summary');
       summary.textContent = 'Thoughts';
       const pre = document.createElement('pre');
@@ -195,9 +196,16 @@
     scrollBottom();
   }
 
-  function finishAssistantMessage() {
+  function finishAssistantMessage(finalText) {
     const msg = state.currentAssistant;
     if (!msg) return;
+    if (!msg.body && finalText) {
+      // The final turn streamed no visible text (e.g. the model ended with
+      // empty content after doing the work) — fall back to the run's final
+      // output so a finished task always shows a reply.
+      msg.text = finalText;
+      ensureBody(msg);
+    }
     if (msg.body) {
       msg.body.innerHTML = MD.renderMarkdown(msg.text);
       msg.dirty = false;
@@ -659,7 +667,7 @@
         openApprovalDialog(msg.tool_call);
         break;
       case 'run_done':
-        finishAssistantMessage();
+        finishAssistantMessage(msg.result && msg.result.final_output);
         closeApprovalDialog();
         refreshSessions();
         setPhase('idle');

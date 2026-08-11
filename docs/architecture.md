@@ -28,7 +28,7 @@ src/harness/
 ├── tools/
 │   ├── base.py          # Tool + @tool decorator (pydantic JSON Schema)
 │   ├── registry.py      # ToolRegistry -> OpenAI function schemas
-│   ├── builtin/         # read_file, write_file, glob, grep, bash
+│   ├── builtin/         # read_file, write_file, glob_files, grep_files, bash
 │   └── mcp/             # MCP client manager + tool adapter
 ├── memory/
 │   ├── session.py       # SQLite sessions/messages/checkpoints + file snapshots

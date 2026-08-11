@@ -26,6 +26,11 @@ def _tc(name: str = "bash", args: str = "{}") -> ToolCall:
 def test_default_harness_read_allowed_bash_asks() -> None:
     perms = Permissions.default_harness()
     assert perms.decide(_tc("read_file")) is Permission.ALLOW
+    # Rules must match the builtin tool names exactly (not the "glob"/"grep"
+    # shorthand — fnmatch without a wildcard is an exact match, so the
+    # shorthand silently fell through to ASK and broke plan-mode reads).
+    assert perms.decide(_tc("glob_files")) is Permission.ALLOW
+    assert perms.decide(_tc("grep_files")) is Permission.ALLOW
     assert perms.decide(_tc("bash")) is Permission.ASK
     assert perms.decide(_tc("mcp_server_tool")) is Permission.ASK
 
@@ -259,6 +264,20 @@ async def test_mode_plan_reads_allow_mutations_denied() -> None:
     assert result.is_error
     assert "denied" in result.content
     assert len(calls) == 1
+    assert prompts == []
+
+
+async def test_mode_plan_allows_read_search_tools() -> None:
+    """Plan mode stays read-only but must still permit the search tools the
+    policy allows unconditionally (glob_files / grep_files under
+    default_harness) — read-only planning is unusable if searching asks."""
+    executor, calls, prompts = _make_mode_executor(
+        Permissions.default_harness(), mode=Mode.PLAN
+    )
+    for name in ("read_file", "glob_files", "grep_files"):
+        result = await executor(_agent(), _tc(name))
+        assert not result.is_error, name
+    assert len(calls) == 3
     assert prompts == []
 
 

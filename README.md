@@ -48,10 +48,10 @@ DEEPSEEK_API_KEY=sk-...
 ```bash
 uv run harness chat                 # interactive REPL
 uv run harness chat --session <id>  # resume a session
-uv run harness chat --subagents     # enable researcher/coder subagents
+uv run harness chat --subagents     # enable subagents (researcher/coder/frontend_design/doc_writer)
 uv run harness serve                # Codex-style web UI → http://127.0.0.1:8000
 uv run harness serve --port 9000 --reload   # dev (auto-reloads on edits)
-uv run harness serve --subagents            # enable researcher/coder subagents in the web UI
+uv run harness serve --subagents            # enable subagents in the web UI (researcher/coder/frontend_design/doc_writer)
 uv run harness --help
 ```
 
@@ -62,8 +62,9 @@ with **no build step**. It shares the exact same core stack as the CLI, so the
 two surfaces never drift. Features: session sidebar (create/switch/resume, with
 auto-named titles — double-click a title to rename), a status-bar **permission
 mode switcher** (计划 / 手动确认 / 自动 / 完全放开, per connection, defaulting
-to manual confirmation), streaming markdown messages with a collapsible thinking
-panel, tool-call cards showing the command + stdout/stderr, an approval dialog
+to manual confirmation), streaming markdown messages with an auto-opened
+thinking panel (the model's reasoning is visible while it works), tool-call
+cards showing the command + stdout/stderr, an approval dialog
 (`y`/`n`/`a`/`p`/edit args), pause/resume checkpoints, `/plan` streaming with
 step tracking, and per-message **回退** (roll back the conversation and undo
 every `write_file` made after that point) and **分叉** (fork the history into a

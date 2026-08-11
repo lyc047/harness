@@ -16,7 +16,13 @@ from fastapi.testclient import TestClient
 from harness.config import Settings
 from harness.core.messages import ToolCall
 from harness.core.runner import ToolExecutor
-from harness.llm.base import LLMResponse
+from harness.llm.base import (
+    LLMResponse,
+    StreamEnd,
+    StreamReasoning,
+    StreamText,
+    StreamToolCall,
+)
 from harness.memory.store import Store
 from harness.tools.base import ToolResult
 from harness.web.runtime import Runtime
@@ -551,3 +557,84 @@ def test_ws_mcp_command_roundtrip(tmp_path, make_provider) -> None:
             result = _recv_until(ws, "command_result")[-1]
             assert result["ok"] is True
             assert result["payload"]["action"] == "removed"
+
+
+# --------------------------------------------------------------------------
+# WebSocket: streaming frames a reasoning model produces
+# --------------------------------------------------------------------------
+
+
+class _ReasoningProvider:
+    """Scripted provider that streams thinking like deepseek-v4-flash: a
+    reasoning model emits reasoning_content + tool calls during work turns and
+    reasoning_content + content on the final turn — never content between tools.
+    Locks the frame contract the frontend's thinking panel and final-reply
+    fallback depend on."""
+
+    def __init__(self, script: list[LLMResponse]) -> None:
+        self._script = script
+
+    async def complete(
+        self, messages: object, *, tools: object = None
+    ) -> LLMResponse:
+        events = [e async for e in self.stream(messages, tools=tools)]  # type: ignore[arg-type]
+        return next(e.response for e in events if isinstance(e, StreamEnd))
+
+    async def stream(self, messages: object, *, tools: object = None):  # type: ignore[no-untyped-def]
+        response = (
+            self._script.pop(0) if self._script else LLMResponse(final_text="(no script)")
+        )
+        if response.reasoning_content:
+            yield StreamReasoning(text=response.reasoning_content)
+        if response.tool_calls:
+            for tc in response.tool_calls:
+                yield StreamToolCall(tool_call=tc)
+        if response.final_text:
+            yield StreamText(text=response.final_text)
+        yield StreamEnd(response=response)
+
+
+def test_ws_streams_reasoning_then_tools_then_final(tmp_path) -> None:
+    """A reasoning-model run reaches the client as thinking + tools + a final
+    answer, and ``run_done`` always carries ``final_output`` — the field the
+    frontend falls back to when the final turn streams no visible text."""
+    script = [
+        LLMResponse(
+            reasoning_content="need to search",
+            tool_calls=[
+                ToolCall(id="t1", name="grep_files", arguments='{"pattern": "x"}')
+            ],
+        ),
+        LLMResponse(reasoning_content="found it", final_text="found it"),
+    ]
+
+    async def executor(agent: object, tool_call: ToolCall) -> ToolResult:
+        return ToolResult.ok("ok")
+
+    with _client(tmp_path, lambda s: _ReasoningProvider(s), script, executor) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ready
+            ws.send_json({"type": "message", "content": "search x"})
+            frames = _recv_until(ws, "run_done")
+            types = [f["type"] for f in frames]
+            assert "reasoning" in types
+            assert "tool_call" in types
+            assert "tool_result" in types
+            assert "text" in types
+            assert types[-1] == "run_done"
+            assert frames[-1]["result"]["final_output"] == "found it"
+
+
+def test_ws_run_done_with_empty_final_keeps_contract(tmp_path) -> None:
+    """A run whose final turn streams only thinking (no content) still emits
+    ``run_done`` with ``final_output`` — the boundary the frontend's
+    final-reply fallback handles (empty output → the visible thinking panel)."""
+    script = [LLMResponse(reasoning_content="the answer is 5")]
+    with _client(tmp_path, lambda s: _ReasoningProvider(s), script) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ready
+            ws.send_json({"type": "message", "content": "hi"})
+            frames = _recv_until(ws, "run_done")
+            assert frames[-1]["type"] == "run_done"
+            assert frames[-1]["result"]["final_output"] is None
+            assert any(f["type"] == "reasoning" for f in frames)
