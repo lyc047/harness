@@ -29,6 +29,8 @@
     editSubmit: $('#edit-submit'),
     pauseOverlay: $('#pause-overlay'),
     pauseInfo: $('#pause-info'),
+    jumpBtn: $('#jump-btn'),
+    jumpPanel: $('#jump-panel'),
   };
 
   const state = {
@@ -36,9 +38,11 @@
     ws: null,
     reconnectAttempt: 0,
     activeSession: null,
-    currentAssistant: null,   // { el, body, text, reasoning, reasoningEl }
+    currentAssistant: null,   // { el, body, text, reasoning, reasoningEl, step }
     lastAssistantEl: null,
     currentApproval: null,    // { toolCallId }
+    steps: [],                // history-jump timeline: { n, el, preview }
+    stepCount: 0,
   };
 
   let toolCards = {};         // tool_call.id -> { el, output, status }
@@ -111,6 +115,7 @@
     body.textContent = text;
     el.appendChild(body);
     els.transcript.appendChild(el);
+    registerStep(el, text.slice(0, 60));
     scrollBottom();
   }
 
@@ -126,6 +131,7 @@
     const el = document.createElement('div');
     el.className = 'message assistant';
     els.transcript.appendChild(el);
+    const step = registerStep(el, '…');
     state.lastAssistantEl = el;
     state.currentAssistant = {
       el: el,
@@ -133,6 +139,7 @@
       text: '',
       reasoning: '',
       reasoningEl: null,
+      step: step,
     };
     return state.currentAssistant;
   }
@@ -195,7 +202,11 @@
     } else if (msg.reasoningEl) {
       // reasoning-only turn: leave the panel, nothing else to render
     }
+    if (msg.step) {
+      msg.step.preview = (msg.text || 'agent reply').slice(0, 60);
+    }
     state.currentAssistant = null;
+    renderJumpPanel();
     scrollBottom();
   }
 
@@ -462,6 +473,10 @@
     toolCards = {};
     state.currentAssistant = null;
     state.lastAssistantEl = null;
+    state.steps = [];
+    state.stepCount = 0;
+    hideJumpPanel();
+    renderJumpPanel();
   }
 
   function refreshSessions() {
@@ -718,7 +733,86 @@
     setPhase('idle');
   });
 
+  // ---------------------------------------------------------------- history jump
+
+  function registerStep(el, preview) {
+    state.stepCount += 1;
+    const step = { n: state.stepCount, el: el, preview: preview };
+    state.steps.push(step);
+    addStepBadge(el, step.n);
+    renderJumpPanel();
+    return step;
+  }
+
+  function addStepBadge(el, n) {
+    const badge = document.createElement('span');
+    badge.className = 'step-badge';
+    badge.textContent = String(n);
+    badge.title = '第 ' + n + ' 步';
+    badge.addEventListener('click', function (e) {
+      e.stopPropagation();
+      jumpToStep(n);
+    });
+    el.appendChild(badge);
+  }
+
+  function renderJumpPanel() {
+    const has = state.steps.length > 0;
+    els.jumpBtn.hidden = !has;
+    if (!has) {
+      hideJumpPanel();
+      els.jumpPanel.innerHTML = '';
+      return;
+    }
+    els.jumpPanel.innerHTML = '';
+    state.steps.forEach(function (s) {
+      const row = document.createElement('div');
+      row.className = 'jump-row';
+      const num = document.createElement('span');
+      num.className = 'jump-num';
+      num.textContent = String(s.n);
+      const prev = document.createElement('span');
+      prev.className = 'jump-preview';
+      prev.textContent = s.preview || '…';
+      row.appendChild(num);
+      row.appendChild(prev);
+      row.addEventListener('click', function () { jumpToStep(s.n); });
+      els.jumpPanel.appendChild(row);
+    });
+  }
+
+  function jumpToStep(n) {
+    const step = state.steps.find(function (s) { return s.n === n; });
+    if (!step) return;
+    hideJumpPanel();
+    step.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    step.el.classList.add('flash');
+    setTimeout(function () { step.el.classList.remove('flash'); }, 1500);
+  }
+
+  function hideJumpPanel() {
+    els.jumpPanel.hidden = true;
+  }
+
   // ---------------------------------------------------------------- boot
+
+  els.jumpBtn.addEventListener('click', function () {
+    if (els.jumpPanel.hidden) {
+      renderJumpPanel();
+      els.jumpPanel.hidden = false;
+    } else {
+      hideJumpPanel();
+    }
+  });
+  document.addEventListener('click', function (e) {
+    if (
+      !els.jumpPanel.hidden &&
+      !els.jumpPanel.contains(e.target) &&
+      e.target !== els.jumpBtn
+    ) {
+      hideJumpPanel();
+    }
+  });
 
   setPhase('connecting');
   connectWS();
