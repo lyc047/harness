@@ -51,17 +51,24 @@ def default_agent(settings: Settings) -> Agent:
     )
 
 
-def add_example_subagents(stack: CoreStack) -> None:
+def add_example_subagents(stack: CoreStack, *, subagent_model: str = "") -> None:
     """Register the built-in researcher/coder subagents as delegate tools.
 
     One implementation shared by the CLI (``--subagents``), the web runtime and
     the web REST read stack, so every surface exposes the same delegation tools.
     Lazy imports keep the ``agents`` package out of the hot composition path.
+    ``subagent_model`` is the cheaper model subagents inherit when set
+    (``HARNESS_SUBAGENT_MODEL``); empty means they use the parent's model.
     """
     from harness.agents.examples import example_subagents
     from harness.agents.orchestrator import add_subagents, attach_delegation_protocol
 
-    add_subagents(stack.agent, stack.runner, example_subagents())
+    add_subagents(
+        stack.agent,
+        stack.runner,
+        example_subagents(),
+        default_model=subagent_model or None,
+    )
     # Tell the parent to write self-contained delegation briefs, so isolated
     # subagents (which can't see the conversation) get the context they need.
     attach_delegation_protocol(stack.agent)

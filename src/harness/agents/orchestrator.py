@@ -178,10 +178,22 @@ def subagent_as_tool(subagent: Subagent, runner: Runner, default_model: str) -> 
     )
 
 
-def add_subagents(agent: Agent, runner: Runner, subagents: list[Subagent]) -> None:
-    """Register every subagent as a delegation tool on ``agent``."""
+def add_subagents(
+    agent: Agent,
+    runner: Runner,
+    subagents: list[Subagent],
+    *,
+    default_model: str | None = None,
+) -> None:
+    """Register every subagent as a delegation tool on ``agent``.
+
+    ``default_model`` is the model subagents inherit (a configured cheaper
+    tier); it falls back to the parent agent's model when unset. A subagent's
+    own ``model`` field still wins over both.
+    """
+    base = default_model or agent.model
     for sa in subagents:
-        agent.tools.register(subagent_as_tool(sa, runner, agent.model))
+        agent.tools.register(subagent_as_tool(sa, runner, base))
 
 
 def attach_delegation_protocol(agent: Agent) -> None:

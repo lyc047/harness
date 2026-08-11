@@ -83,8 +83,13 @@ class LLMProvider(Protocol):
         messages: list[Message],
         *,
         tools: list[ToolSchema] | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
-        """Non-streaming call: return the full response."""
+        """Non-streaming call: return the full response.
+
+        ``model`` overrides the provider's configured model for this call
+        (e.g. a cheaper subagent model); None uses the provider default.
+        """
         ...
 
     def stream(
@@ -92,6 +97,11 @@ class LLMProvider(Protocol):
         messages: list[Message],
         *,
         tools: list[ToolSchema] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        """Streaming call: yield text/reasoning/tool-call events then StreamEnd."""
+        """Streaming call: yield text/reasoning/tool-call events then StreamEnd.
+
+        ``model`` overrides the provider's configured model for this call;
+        None uses the provider default.
+        """
         ...

@@ -151,7 +151,12 @@ class Runner:
             await self._hooks.emit(self._hooks.on_model_call, agent)
 
             response = None
-            async for event in self._provider.stream(messages, tools=tool_schemas):
+            # agent.model (if set) overrides the provider's configured model
+            # for this run — the per-agent model tiering seam. Empty string
+            # means "inherit the provider default".
+            async for event in self._provider.stream(
+                messages, tools=tool_schemas, model=agent.model or None
+            ):
                 if isinstance(event, StreamEnd):
                     response = event.response
                 else:

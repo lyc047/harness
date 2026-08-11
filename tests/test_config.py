@@ -31,6 +31,13 @@ def test_alias_vars():
     assert s.api_key == "k"
 
 
+def test_subagent_model_env():
+    s = Settings.from_env({"HARNESS_SUBAGENT_MODEL": "deepseek-v3"})
+    assert s.subagent_model == "deepseek-v3"
+    # unset => subagents inherit the parent model
+    assert Settings.from_env({}).subagent_model == ""
+
+
 def test_replace_returns_new_instance():
     s = Settings.from_env({})
     s2 = s.replace(model="other-model")

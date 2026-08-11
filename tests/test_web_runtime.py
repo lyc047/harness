@@ -535,6 +535,63 @@ async def test_runtime_subagents_enabled_by_setting(make_provider, tmp_path) -> 
     await store.close()
 
 
+async def test_runtime_subagent_model_tiering(make_provider, tmp_path) -> None:
+    """HARNESS_SUBAGENT_MODEL gives delegates a cheaper model tier; unset, they
+    inherit the parent (settings.model)."""
+    rt, store = await _make_runtime(
+        tmp_path,
+        make_provider,
+        [LLMResponse(final_text="x")],
+        HARNESS_SUBAGENTS="1",
+        HARNESS_SUBAGENT_MODEL="cheap-model",
+    )
+    tool = rt.stack.agent.tools.get("delegate_to_researcher")
+    assert tool is not None and tool._model == "cheap-model"
+    await rt.shutdown()
+    await store.close()
+
+    rt2, store2 = await _make_runtime(
+        tmp_path, make_provider, [LLMResponse(final_text="x")], HARNESS_SUBAGENTS="1"
+    )
+    tool2 = rt2.stack.agent.tools.get("delegate_to_researcher")
+    assert tool2 is not None and tool2._model == "deepseek-v4-flash"
+    await rt2.shutdown()
+    await store2.close()
+
+
+async def test_runtime_subagent_runs_on_cheaper_model(make_provider, tmp_path) -> None:
+    """The parent turn hits settings.model; the delegated subagent turn hits
+    the configured cheaper tier — same provider, different model per run."""
+    script = [
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="t1",
+                    name="delegate_to_researcher",
+                    arguments='{"task": "research something"}',
+                )
+            ]
+        ),
+        LLMResponse(final_text="subagent answer"),
+        LLMResponse(final_text="parent done"),
+    ]
+    rt, store = await _make_runtime(
+        tmp_path,
+        make_provider,
+        script,
+        HARNESS_SUBAGENTS="1",
+        HARNESS_SUBAGENT_MODEL="cheap-model",
+    )
+    provider = rt.stack.provider
+    rt.start_run("research something")
+    rt.decisions.put_nowait("y")  # approve the hand-off
+    await _collect_frames(rt, until="run_done")
+    # parent T1 -> subagent turn -> parent T2
+    assert provider.models == ["deepseek-v4-flash", "cheap-model", "deepseek-v4-flash"]
+    await rt.shutdown()
+    await store.close()
+
+
 async def test_runtime_subagent_tool_runs_isolated_session(
     make_provider, tmp_path
 ) -> None:

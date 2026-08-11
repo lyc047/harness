@@ -135,7 +135,11 @@ class _RecordingProvider:
         self.fed: list[list[Message]] = []
 
     async def stream(
-        self, messages: list[Message], *, tools: list[ToolSchema] | None = None
+        self,
+        messages: list[Message],
+        *,
+        tools: list[ToolSchema] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         self.fed.append(list(messages))
         response = self.script.pop(0)
@@ -380,3 +384,30 @@ def test_subagent_registry_ignores_invalid_yaml(tmp_path) -> None:
     assert "scalar" not in reg.names()
     # bundled defaults still load alongside
     assert "researcher" in reg.names()
+
+
+# ---- per-subagent model tiering ---- #
+
+
+async def test_runner_passes_agent_model_to_provider(make_provider) -> None:
+    """The provider now honors ``agent.model`` per request — previously the
+    runner never forwarded it, so per-agent models were cosmetic."""
+    provider = make_provider([LLMResponse(final_text="done")])
+    agent = Agent(name="assistant", instructions="x", model="deepseek-v4-pro")
+    runner = Runner(provider)
+    await runner.run(agent, "hi", session_id=None)
+    assert provider.models == ["deepseek-v4-pro"]
+
+
+def test_subagent_model_tiering_wiring(make_provider) -> None:
+    """The configured cheaper tier is inherited by every delegate unless a
+    subagent pins its own model (which wins)."""
+    runner = Runner(make_provider())
+    agent = Agent(name="parent", instructions="p", model="parent-model")
+    subs = [_subagent("a"), _subagent("b")]
+    subs[1].model = "custom-model"
+    add_subagents(agent, runner, subs, default_model="cheap-model")
+    tool_a = agent.tools.get("delegate_to_a")
+    tool_b = agent.tools.get("delegate_to_b")
+    assert tool_a is not None and tool_a._model == "cheap-model"
+    assert tool_b is not None and tool_b._model == "custom-model"

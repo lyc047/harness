@@ -169,7 +169,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     if args.subagents:
         from harness.core.compose import add_example_subagents
 
-        add_example_subagents(stack)
+        add_example_subagents(stack, subagent_model=settings.subagent_model)
         delegate_tools = sorted(
             name for name in stack.agent.tools.names() if name.startswith("delegate_to_")
         )

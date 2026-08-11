@@ -89,9 +89,10 @@ class OpenAICompatProvider:
         messages: list[Message],
         *,
         tools: list[ToolSchema] | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
         wire = [m.to_openai_dict() for m in messages]
-        resp = await self._request(wire, tools=tools)
+        resp = await self._request(wire, tools=tools, model=model)
         return self._parse_message(resp)
 
     async def stream(
@@ -99,9 +100,10 @@ class OpenAICompatProvider:
         messages: list[Message],
         *,
         tools: list[ToolSchema] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         wire = [m.to_openai_dict() for m in messages]
-        stream = await self._request(wire, tools=tools, stream=True)
+        stream = await self._request(wire, tools=tools, stream=True, model=model)
 
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -165,8 +167,9 @@ class OpenAICompatProvider:
         *,
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
+        model: str | None = None,
     ) -> Any:
-        kwargs: dict[str, Any] = {"model": self.model, "messages": wire, "stream": stream}
+        kwargs: dict[str, Any] = {"model": model or self.model, "messages": wire, "stream": stream}
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

@@ -56,6 +56,7 @@ class Settings:
 
     # Multi-agent orchestration: register researcher/coder delegate tools
     subagents: bool = False
+    subagent_model: str = ""  # cheaper model for subagents; empty => inherit parent
 
     # Logging / tracing
     log_level: str = "INFO"
@@ -125,6 +126,7 @@ class Settings:
             memory_dir=get("HARNESS_MEMORY_DIR", default="memory"),
             permissions_file=get("HARNESS_PERMISSIONS_FILE", default="permissions.toml"),
             subagents=get_bool("HARNESS_SUBAGENTS", False),
+            subagent_model=get("HARNESS_SUBAGENT_MODEL"),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),
             log_file=get("HARNESS_LOG_FILE", default="harness.log"),
             trace_file=get("HARNESS_TRACE_FILE", default="harness.trace.jsonl"),

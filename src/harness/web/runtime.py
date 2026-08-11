@@ -153,8 +153,11 @@ class Runtime:
 
         Delegation tools land under the default ASK policy, so the user approves
         each hand-off (and the subagent's own tool calls) in the web dialog.
+        ``HARNESS_SUBAGENT_MODEL`` lets subagents use a cheaper model tier.
         """
-        add_example_subagents(self.stack)
+        add_example_subagents(
+            self.stack, subagent_model=self._settings.subagent_model
+        )
 
     @property
     def stack(self) -> CoreStack:

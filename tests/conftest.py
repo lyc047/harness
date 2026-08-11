@@ -23,18 +23,28 @@ class FakeProvider:
     def __init__(self, script: list[LLMResponse] | None = None) -> None:
         self.script = script or []
         self.stream_calls: list[int] = []  # message count at each call
+        self.models: list[str | None] = []  # model requested at each call
 
     async def complete(
-        self, messages: list[Message], *, tools: list[ToolSchema] | None = None
+        self,
+        messages: list[Message],
+        *,
+        tools: list[ToolSchema] | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
-        events = [e async for e in self.stream(messages, tools=tools)]
+        events = [e async for e in self.stream(messages, tools=tools, model=model)]
         end = next(e for e in events if isinstance(e, StreamEnd))
         return end.response
 
     async def stream(
-        self, messages: list[Message], *, tools: list[ToolSchema] | None = None
+        self,
+        messages: list[Message],
+        *,
+        tools: list[ToolSchema] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         self.stream_calls.append(len(messages))
+        self.models.append(model)
         response = self.script.pop(0) if self.script else LLMResponse(final_text="(no script)")
         if response.tool_calls:
             for tc in response.tool_calls:

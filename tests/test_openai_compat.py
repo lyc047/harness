@@ -140,6 +140,26 @@ async def test_stream_plain_final_only():
 
 
 @pytest.mark.asyncio
+async def test_request_model_override():
+    """A per-call ``model`` overrides the provider's configured model — the seam
+    the cheaper subagent model tier relies on (previously agent.model was
+    cosmetic and the provider always used its own fixed model)."""
+    fake = FakeCompletions()
+    fake.plain_message = SimpleNamespace(content="ok", reasoning_content=None, tool_calls=None)
+    provider = _provider(fake)
+    seen: list[str | None] = []
+
+    async def create(**kwargs):
+        seen.append(kwargs.get("model"))
+        return await FakeCompletions.create(fake, **kwargs)
+
+    fake.create = create
+    await provider.complete([Message.user("hi")], model="cheap-model")
+    await provider.complete([Message.user("hi")])
+    assert seen == ["cheap-model", "deepseek-v4-flash"]
+
+
+@pytest.mark.asyncio
 async def test_messages_include_reasoning_passthrough():
     """Assistant reasoning_content survives the wire conversion (DeepSeek 400 guard)."""
     from harness.core.messages import Message
