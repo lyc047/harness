@@ -19,6 +19,61 @@ from harness.tools.base import Tool, ToolResult
 
 logger = get_logger("agents")
 
+# Tells the parent how to delegate. Delegation is the default for matched work
+# (a subagent's skill only applies when the parent delegates to it), and every
+# brief must be self-contained because the subagent runs in isolation — its
+# ONLY input is the brief assembled from the structured ``delegate_to_<name>``
+# parameters. Attached to the parent's instructions when subagents are enabled
+# (``attach_delegation_protocol``).
+DELEGATION_PROTOCOL = """\
+## Delegation protocol
+
+You can delegate work to subagents via `delegate_to_<name>`. Each delegate
+tool's description states what it is for — treat it as its trigger. When the
+task matches a subagent's described work, delegate by default instead of
+doing it yourself: the subagent runs the work with its own tools and skill,
+and returns a structured result. A subagent's skill only applies when you
+delegate to it — doing the work yourself never reaches that skill.
+
+Fill the structured parameters so the subagent gets a complete, self-contained
+brief. It runs in isolation and sees ONLY the fields you pass — never this
+conversation:
+
+- `task` — what to achieve, decide, or produce (required).
+- `scope` — the files, directories, or topics to work on.
+- `constraints` — method rules (e.g. "read the file before judging", "do not
+  write files", "reply in Chinese").
+- `expected_output` — the required deliverable and format (list, summary,
+  code; word/page caps).
+
+Never rely on the subagent knowing anything from our conversation. After it
+returns, check the delivery against `expected_output`; if a required part is
+missing, either call the same subagent again with a focused follow-up task, or
+state the gap in your answer.
+"""
+
+
+def _compose_brief(
+    task: str,
+    *,
+    scope: str = "",
+    constraints: str = "",
+    expected_output: str = "",
+) -> str:
+    """Assemble the subagent's single input message from the structured fields.
+
+    The subagent receives exactly one user message, so every provided field is
+    merged into one labeled brief it can act on independently.
+    """
+    parts = [task]
+    if scope:
+        parts.append(f"Scope: {scope}")
+    if constraints:
+        parts.append(f"Constraints: {constraints}")
+    if expected_output:
+        parts.append(f"Expected output: {expected_output}")
+    return "\n\n".join(parts)
+
 
 class SubagentTool(Tool):
     """Runs a :class:`Subagent` in isolation and returns its final output."""
@@ -40,10 +95,32 @@ class SubagentTool(Tool):
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "The specific task to delegate to this subagent.",
-                    }
+                        "description": (
+                            "What to achieve, decide, or produce. Self-contained: "
+                            "the subagent cannot see this conversation."
+                        ),
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "The files, directories, or topics to work on.",
+                    },
+                    "constraints": {
+                        "type": "string",
+                        "description": (
+                            "Method rules, e.g. 'read the file before judging', "
+                            "'do not write files', 'reply in Chinese'."
+                        ),
+                    },
+                    "expected_output": {
+                        "type": "string",
+                        "description": (
+                            "The required deliverable and format — list, summary, "
+                            "code; word/page caps."
+                        ),
+                    },
                 },
                 "required": ["task"],
+                "additionalProperties": False,
             },
         )
         self.subagent = subagent
@@ -54,10 +131,17 @@ class SubagentTool(Tool):
         task = str(kwargs.get("task") or kwargs.get("prompt") or "").strip()
         if not task:
             return ToolResult.error("no task provided to subagent", agent=self.subagent.name)
-        # session_id=None => isolated history, nothing persisted.
+        # session_id=None => isolated history, nothing persisted. The subagent
+        # gets a single user message assembled from the structured fields.
+        brief = _compose_brief(
+            task,
+            scope=str(kwargs.get("scope") or "").strip(),
+            constraints=str(kwargs.get("constraints") or "").strip(),
+            expected_output=str(kwargs.get("expected_output") or "").strip(),
+        )
         try:
             result = await self._runner.run(
-                self.subagent.as_agent(model=self._model), task, session_id=None
+                self.subagent.as_agent(model=self._model), brief, session_id=None
             )
         except MaxTurnsExceeded as exc:
             # A delegate burning its turn budget must not crash the parent run;
@@ -90,3 +174,12 @@ def add_subagents(agent: Agent, runner: Runner, subagents: list[Subagent]) -> No
     """Register every subagent as a delegation tool on ``agent``."""
     for sa in subagents:
         agent.tools.register(subagent_as_tool(sa, runner, agent.model))
+
+
+def attach_delegation_protocol(agent: Agent) -> None:
+    """Append delegation guidance to a parent agent's instructions.
+
+    Called when subagents are enabled so the parent writes complete,
+    self-contained delegation briefs instead of vague one-liners.
+    """
+    agent.instructions = f"{agent.instructions.rstrip()}\n\n{DELEGATION_PROTOCOL}"

@@ -21,6 +21,7 @@ wheels/
 harness.db
 harness.db-*
 harness.log
+harness.trace.jsonl
 # Anchored to the repo root: the runtime skills/memory dirs at cwd. The
 # unanchored "skills/" also matched src/harness/skills/ (any depth), which
 # would have hidden the bundled skills that ship in the package source.

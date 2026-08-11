@@ -89,11 +89,36 @@ def _with_skill(instructions: str, skill_name: str) -> str:
     return f"{instructions}\n\n# Skill: {skill_name}\n\n{body}"
 
 
+# Every built-in subagent returns its result in this shape, so the parent can
+# verify the delivery against what it asked for (see the delegation protocol
+# in orchestrator.py) even though it never sees the subagent's internals.
+DELIVERY_CONTRACT = """\
+## Delivery contract
+
+Return your final message as plain text with three parts:
+1. WHAT YOU DID — the actual steps (files read, commands run).
+2. KEY FINDINGS / RESULT — the substantive answer, with file paths.
+3. GAPS — anything you could not determine, or open questions.
+
+Keep it under 200 words unless the task asks for more. If you wrote files,
+lead with their paths and what each is for.
+"""
+
+
+def _with_delivery(instructions: str) -> str:
+    return f"{instructions.rstrip()}\n\n{DELIVERY_CONTRACT}"
+
+
 def researcher() -> Subagent:
     return Subagent(
         name="researcher",
-        description="Searches the workspace for facts and returns a research summary.",
-        instructions=RESEARCHER_INSTRUCTIONS,
+        description=(
+            "Use when the task needs facts gathered from the workspace — files, "
+            "code, git history, or searches. For research or investigation "
+            "tasks, delegate to researcher by default instead of doing the "
+            "search yourself; it returns a factual summary under 200 words."
+        ),
+        instructions=_with_delivery(RESEARCHER_INSTRUCTIONS),
         tools=builtin_registry(),
         max_turns=8,
     )
@@ -102,8 +127,13 @@ def researcher() -> Subagent:
 def coder() -> Subagent:
     return Subagent(
         name="coder",
-        description="Inspects, writes and runs code; returns a summary of changes.",
-        instructions=CODER_INSTRUCTIONS,
+        description=(
+            "Use when code needs to be inspected, written, modified, or tested. "
+            "For any coding task, delegate to coder by default instead of "
+            "writing the code yourself; it runs the tests and returns "
+            "verification output."
+        ),
+        instructions=_with_delivery(CODER_INSTRUCTIONS),
         tools=builtin_registry(),
         max_turns=8,
     )
@@ -113,11 +143,14 @@ def frontend_design() -> Subagent:
     return Subagent(
         name="frontend_design",
         description=(
-            "Designs distinctive, intentional frontend UI (new interfaces or "
-            "reshaping existing ones) and returns a design plan or implemented "
-            "HTML/CSS/JS."
+            "Use when the task involves designing or reshaping frontend UI — new "
+            "interfaces or restyling existing HTML/CSS/JS. For UI design work, "
+            "delegate to frontend_design by default instead of designing "
+            "yourself; it returns a design plan or implemented files."
         ),
-        instructions=_with_skill(FRONTEND_DESIGN_INSTRUCTIONS, "frontend-design"),
+        instructions=_with_delivery(
+            _with_skill(FRONTEND_DESIGN_INSTRUCTIONS, "frontend-design")
+        ),
         tools=builtin_registry(),
         max_turns=10,
     )
@@ -127,10 +160,14 @@ def doc_writer() -> Subagent:
     return Subagent(
         name="doc_writer",
         description=(
-            "Co-authors documentation with the user (docs, proposals, specs, "
-            "decision docs) and returns the written document path and summary."
+            "Use when the task involves writing or co-authoring documentation — "
+            "docs, proposals, specs, decision docs, RFCs. For documentation "
+            "work, delegate to doc_writer by default instead of drafting "
+            "yourself; it returns the document path and a summary."
         ),
-        instructions=_with_skill(DOC_WRITER_INSTRUCTIONS, "doc-coauthoring"),
+        instructions=_with_delivery(
+            _with_skill(DOC_WRITER_INSTRUCTIONS, "doc-coauthoring")
+        ),
         tools=builtin_registry(),
         max_turns=12,
     )

@@ -59,9 +59,12 @@ def add_example_subagents(stack: CoreStack) -> None:
     Lazy imports keep the ``agents`` package out of the hot composition path.
     """
     from harness.agents.examples import example_subagents
-    from harness.agents.orchestrator import add_subagents
+    from harness.agents.orchestrator import add_subagents, attach_delegation_protocol
 
     add_subagents(stack.agent, stack.runner, example_subagents())
+    # Tell the parent to write self-contained delegation briefs, so isolated
+    # subagents (which can't see the conversation) get the context they need.
+    attach_delegation_protocol(stack.agent)
 
 
 def load_permissions(settings: Settings) -> Permissions:
