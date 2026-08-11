@@ -59,12 +59,29 @@ uv run harness --help
 
 `uv run harness serve` starts FastAPI/uvicorn (REST + WebSocket + static files)
 with **no build step**. It shares the exact same core stack as the CLI, so the
-two surfaces never drift. Features: session sidebar (create/switch/resume),
-streaming markdown messages with a collapsible thinking panel, tool-call cards
-showing the command + stdout/stderr, an approval dialog (`y`/`n`/`a`/`p`/edit
-args), pause/resume checkpoints, and `/plan` streaming with step tracking. The
-frontend is vanilla HTML/CSS/JS and works offline — no CDN. Runs are per-tab;
-all sessions share one SQLite store.
+two surfaces never drift. Features: session sidebar (create/switch/resume, with
+auto-named titles — double-click a title to rename), streaming markdown
+messages with a collapsible thinking panel, tool-call cards showing the command
++ stdout/stderr, an approval dialog (`y`/`n`/`a`/`p`/edit args), pause/resume
+checkpoints, `/plan` streaming with step tracking, and per-message **回退**
+(roll back the conversation and undo every `write_file` made after that point)
+and **分叉** (fork the history into a new child session). The frontend is
+vanilla HTML/CSS/JS and works offline — no CDN. Runs are per-tab; all sessions
+share one SQLite store.
+
+REST + WS API (all `json`):
+
+| Method / WS type | Purpose |
+|---|---|
+| `GET /api/sessions` · `POST /api/sessions` | list / create sessions |
+| `PATCH /api/sessions/{id}` `{"name"}` | rename a session |
+| `GET /api/sessions/{id}/messages` · `DELETE` | history / delete |
+| `{type:"message"}` · `{type:"plan"}` | start a run / plan |
+| `{type:"approval","decision":"y\|n\|a\|p\|e:…"}` | approve a tool |
+| `{type:"pause"\|"resume"\|"cancel"}` | run control |
+| `{type:"rollback","step":N}` | roll back conversation + code to step N |
+| `{type:"branch","step":N}` | fork a new session from step N |
+| `{type:"command","name":…}` | slash commands |
 
 ### REPL commands
 

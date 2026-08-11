@@ -19,6 +19,7 @@ src/harness/
 │   ├── runner.py        # the turn loop (stateless executor)
 │   ├── run_result.py    # RunResult / RunState / RunPaused
 │   ├── hooks.py         # lifecycle callbacks (observability, rendering)
+│   ├── snapshot.py      # SnapshotExecutor: pre-write file snapshots (rollback)
 │   └── compose.py       # build_core_stack(): the one CLI+web composition point
 ├── llm/
 │   ├── base.py          # LLMProvider protocol + StreamEvent types
@@ -30,7 +31,7 @@ src/harness/
 │   ├── builtin/         # read_file, write_file, glob, grep, bash
 │   └── mcp/             # MCP client manager + tool adapter
 ├── memory/
-│   ├── session.py       # SQLite session persistence + checkpoints
+│   ├── session.py       # SQLite sessions/messages/checkpoints + file snapshots
 │   ├── preferences.py   # user preferences (key/value, SQLite)
 │   └── store.py         # Store facade (sessions + preferences)
 ├── agents/
@@ -70,11 +71,12 @@ src/harness/
 3. **Tool calls** — each `ToolCall` is executed through the **executor chain**:
 
    ```
-   ApprovalExecutor(SandboxedExecutor(default_executor, sandbox), permissions)
+   ApprovalExecutor(SandboxedExecutor(SnapshotExecutor(default_executor, sessions), sandbox), permissions)
    ```
 
-   approval first, then sandbox routing for `bash`. Results are appended as
-   `tool` messages.
+   approval first, then sandbox routing for `bash`, then a pre-write
+   **snapshot** of every `write_file` target (so the conversation can roll the
+   workspace back). Results are appended as `tool` messages.
 4. **Loop** — until the model produces a final answer or `max_turns` is
    exceeded. The message list is persisted after every turn, so a killed
    process can resume from the checkpoint.
@@ -110,6 +112,21 @@ browser (vanilla JS SPA) ⇄ FastAPI/uvicorn ⇄ per-connection Runtime ⇄ Runn
 - **Cancellation** — a new `message`/`plan`/`cancel`/disconnect cancels the
   previous run task. The run tasks convert `RunPaused` into a checkpoint +
   `paused` frame, `MaxTurnsExceeded`/exceptions into `run_error`.
+- **Session naming** — sessions carry an optional `name`; an unnamed session is
+  titled by an LLM one-liner summary of its first user message (`provider.complete`,
+  falling back to plain truncation when the call fails or times out so a slow
+  model can never block the turn). Double-click a sidebar title to rename it
+  (`PATCH /api/sessions/{id}`); renames and auto-titles persist to SQLite.
+- **Rollback** — hovering a user/assistant bubble shows `回退`. The server maps
+  the UI step (user/assistant bubbles only) to the DB message `idx`, restores
+  every pre-write file snapshot captured after that point (newest first, so two
+  writes to one file undo in reverse), then truncates the history and emits a
+  `rolled_back` frame. Only `write_file` is tracked — `bash` gives no reliable
+  per-file signal, so its mutations are intentionally not rolled back.
+- **Branching** — `分叉` copies the conversation `[0..step]` into a new child
+  session (`parent_session_id` recorded, `· 分支`-suffixed default name) and
+  switches to it. Files stay shared across the branch — both sessions see the
+  same workspace.
 - **Frontend** is four hand-written files (no build step, no CDN): a markdown
   renderer that is escape-first (`escapeHtml` before any inline/block transform,
   `safeUrl` whitelisting http/https) so model/tool text is never injected as
