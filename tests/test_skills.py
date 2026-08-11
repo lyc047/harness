@@ -6,7 +6,11 @@ from pathlib import Path
 
 from harness.memory.preferences import PreferenceStore, make_remember_preference_tool
 from harness.skills.loader import create_skill_file, make_create_skill_tool
-from harness.skills.registry import SkillRegistry, parse_skill_file
+from harness.skills.registry import (
+    BUNDLED_SKILLS_DIR,
+    SkillRegistry,
+    parse_skill_file,
+)
 
 SKILL_MD = """---
 name: code-review
@@ -64,6 +68,34 @@ def test_registry_ignores_non_md(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text(SKILL_MD, encoding="utf-8")
     registry = SkillRegistry(tmp_path)
     assert registry.discover() == []
+
+
+def test_registry_merges_bundled_with_runtime(tmp_path: Path) -> None:
+    """Bundled skills (shipped) merge with the runtime dir; a same-named skill
+    in the runtime dir wins, so a user's edited copy overrides the shipped
+    default."""
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    _write_skill(bundled, "alpha.md", "---\nname: alpha\n---\nBUNDLED alpha\n")
+    _write_skill(bundled, "shared.md", "---\nname: shared\n---\nBUNDLED shared\n")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    _write_skill(runtime, "shared.md", "---\nname: shared\n---\nRUNTIME shared\n")
+
+    registry = SkillRegistry(runtime, bundled_dir=bundled)
+    assert sorted(s.name for s in registry.discover()) == ["alpha", "shared"]
+    shared = registry.get("shared")
+    assert shared is not None and "RUNTIME shared" in shared.content  # runtime wins
+
+
+def test_shipped_bundled_skills_found_without_runtime(tmp_path: Path) -> None:
+    """A fresh clone (no runtime skills dir yet) still gets the shipped skills;
+    subagent-only skills must not leak into the main registry."""
+    registry = SkillRegistry(tmp_path / "no-skills", bundled_dir=BUNDLED_SKILLS_DIR)
+    names = {s.name for s in registry.discover()}
+    assert "skill-creator" in names
+    assert "frontend-design" not in names
+    assert "doc-coauthoring" not in names
 
 
 def test_inject_appends_skill_block(tmp_path: Path) -> None:

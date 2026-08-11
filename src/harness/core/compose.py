@@ -27,7 +27,7 @@ from harness.safety.approver import ApprovalExecutor, ApprovalPrompt
 from harness.safety.permissions import Permissions
 from harness.sandbox import SandboxedExecutor, SandboxProvider, build_sandbox
 from harness.skills.loader import make_create_skill_tool
-from harness.skills.registry import SkillRegistry
+from harness.skills.registry import BUNDLED_SKILLS_DIR, SkillRegistry
 from harness.tools.builtin import builtin_registry
 
 logger = get_logger("compose")
@@ -120,7 +120,9 @@ async def build_core_stack(
 
     # Self-evolving skills + user preferences: expose the tools and inject any
     # discovered skills into the agent's system prompt so they apply from turn 1.
-    skill_registry = SkillRegistry(settings.skills_dir)
+    # Bundled skills ship in the package (fresh clones get them); the runtime
+    # skills dir stays the writable override layer for user-authored skills.
+    skill_registry = SkillRegistry(settings.skills_dir, bundled_dir=BUNDLED_SKILLS_DIR)
     skill_registry.discover()
     agent.tools.register(make_create_skill_tool(skill_registry))
     agent.tools.register(make_remember_preference_tool(store.preferences))

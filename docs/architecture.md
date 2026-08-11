@@ -45,7 +45,8 @@ src/harness/
 │   └── approver.py      # ApprovalExecutor (y/n/a/e/p, fail-closed)
 ├── skills/
 │   ├── registry.py      # markdown + YAML frontmatter skill index
-│   └── loader.py        # runtime skill creation + prompt injection
+│   ├── loader.py        # runtime skill creation + prompt injection
+│   └── bundled/         # skills shipped with the repo (skill-creator, subagent skills)
 ├── sandbox/
 │   ├── base.py          # SandboxResult / SandboxProvider / SandboxedExecutor
 │   ├── local.py         # local subprocess (dev, NO isolation)

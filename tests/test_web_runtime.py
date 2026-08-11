@@ -302,7 +302,8 @@ async def test_runtime_commands_payloads(make_provider, tmp_path) -> None:
     assert "read_file" in names and "bash" in names
 
     skills_p = await rt.handle_command("skills")
-    assert skills_p["skills"] == []
+    skill_names = [s["name"] for s in skills_p["skills"]]
+    assert "skill-creator" in skill_names  # bundled skill ships with the package
 
     perms_p = await rt.handle_command("permissions")
     assert perms_p["default"] == "ask"

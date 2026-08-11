@@ -100,3 +100,29 @@ async def test_subagent_max_turns_degrades_not_crash(make_provider) -> None:
     result = await tool.invoke(task="do it")
     assert result.is_error
     assert "max_turns" in result.content
+
+
+def test_example_subagents_include_design_and_writer() -> None:
+    """The default subagent set ships the frontend-design and doc-writer
+    subagents, each carrying its skill from skills/subagents/."""
+    from harness.agents.examples import example_subagents
+
+    subs = {s.name: s for s in example_subagents()}
+    assert {"researcher", "coder", "frontend_design", "doc_writer"} <= set(subs)
+
+    for name, marker in {
+        "frontend_design": "Frontend Design",
+        "doc_writer": "Doc Co-Authoring Workflow",
+    }.items():
+        assert marker in subs[name].instructions, f"{name} missing its skill"
+
+
+def test_subagent_skill_loads_from_bundled() -> None:
+    """The subagent skills ship in the package source, so they load even on a
+    fresh clone with no runtime skills/ directory. (Regression: they used to
+    live only in the gitignored runtime skills/, so the test above passed only
+    on machines that happened to have the files locally.)"""
+    from harness.agents.examples import _load_subagent_skill
+
+    assert "Frontend Design" in _load_subagent_skill("frontend-design")
+    assert "Doc Co-Authoring Workflow" in _load_subagent_skill("doc-coauthoring")
