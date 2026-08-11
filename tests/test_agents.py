@@ -214,6 +214,8 @@ def test_delegation_protocol_attached_to_parent() -> None:
     assert "isolation" in agent.instructions
     # matched work is delegated by default, not done by the parent itself
     assert "by default" in agent.instructions
+    # the parent reads files the delivery references before judging the result
+    assert "before judging the result" in agent.instructions
 
 
 def test_subagents_carry_delivery_contract() -> None:
@@ -225,6 +227,11 @@ def test_subagents_carry_delivery_contract() -> None:
     for sa in example_subagents():
         for marker in ("WHAT YOU DID", "KEY FINDINGS", "GAPS"):
             assert marker in sa.instructions, f"{sa.name} missing {marker!r}"
+        # large deliverables are written to disk and referenced by path, not
+        # pasted into the reply (keeps the parent's context clean)
+        assert "SAVE IT TO A FILE" in sa.instructions, (
+            f"{sa.name} missing the write-to-disk rule"
+        )
 
 
 def test_delegate_tool_descriptions_carry_triggers() -> None:

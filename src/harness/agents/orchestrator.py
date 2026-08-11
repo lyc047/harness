@@ -49,7 +49,8 @@ conversation:
 Never rely on the subagent knowing anything from our conversation. After it
 returns, check the delivery against `expected_output`; if a required part is
 missing, either call the same subagent again with a focused follow-up task, or
-state the gap in your answer.
+state the gap in your answer. If the delivery references files, read them
+before judging the result — don't judge from the summary alone.
 """
 
 

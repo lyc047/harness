@@ -127,8 +127,10 @@ Return your final message as plain text with three parts:
 2. KEY FINDINGS / RESULT — the substantive answer, with file paths.
 3. GAPS — anything you could not determine, or open questions.
 
-Keep it under 200 words unless the task asks for more. If you wrote files,
-lead with their paths and what each is for.
+Keep it under 200 words unless the task asks for more. If the deliverable is
+too big to fit in the reply (over ~200 words), SAVE IT TO A FILE and return
+the path with a short summary — do not paste the whole thing into your
+message; the parent reads the file. Lead with file paths and what each is for.
 """
 
 
