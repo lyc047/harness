@@ -139,6 +139,13 @@ browser (vanilla JS SPA) ⇄ FastAPI/uvicorn ⇄ per-connection Runtime ⇄ Runn
   tool call, so a running turn keeps its current approvals. `ready` reports the
   active mode; `{type:"set_mode"}` + the `mode_changed` frame keep the dropdown
   in sync.
+- **MCP (per-connection)** — each `Runtime` owns an `MCPClientManager`
+  (`tools/mcp/`), managed from the composer via the `/mcp` slash command
+  (`add stdio|http` / `list` / `remove`; parsed by the shared
+  `build_mcp_config`). Discovered tools register onto the connection's own
+  `agent.tools` as `mcp_<server>_<tool>` and hit the same approval→execute
+  pipeline (default ASK). The manager closes in `Runtime.shutdown()`, so a tab
+  disconnecting tears down its servers; MCP state never crosses tabs.
 - **Frontend** is four hand-written files (no build step, no CDN): a markdown
   renderer that is escape-first (`escapeHtml` before any inline/block transform,
   `safeUrl` whitelisting http/https) so model/tool text is never injected as

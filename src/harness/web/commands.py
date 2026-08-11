@@ -16,6 +16,12 @@ from harness.memory.session import Session
 from harness.memory.store import Store
 from harness.safety.permissions import Permissions
 from harness.skills.registry import SkillRegistry
+from harness.tools.mcp.client import MCPClientManager
+from harness.tools.mcp.manager import (
+    build_mcp_config,
+    register_mcp_server,
+    unregister_mcp_server,
+)
 
 HELP_TEXT = """\
 Commands:
@@ -26,6 +32,7 @@ Commands:
   /skills          list discovered skills
   /permissions     show the active permission policy
   /checkpoints     list saved run checkpoints
+  /mcp <add|list|remove>   connect/manage MCP servers (stdio or HTTP)
   /plan <goal>     plan and execute a multi-step task step by step
 """
 
@@ -71,6 +78,62 @@ async def checkpoints_payload(store: Store) -> dict[str, Any]:
             for cid, created in await store.sessions.list_checkpoints()
         ]
     }
+
+
+async def mcp_payload(mcp: MCPClientManager, arg: str, agent: Agent) -> dict[str, Any]:
+    """The ``/mcp`` command result: ``add stdio|http``, ``list``, or ``remove``.
+
+    Executes against the connection's own manager (per-tab scope) and registers
+    discovered tools onto ``agent.tools`` so the model can call them next turn.
+    """
+    sub, _, subarg = arg.partition(" ")
+    sub = sub.strip().lower()
+    subarg = subarg.strip()
+
+    if sub == "add":
+        transport, _, rest = subarg.partition(" ")
+        name, _, tail = rest.partition(" ")
+        config = build_mcp_config(transport.strip().lower(), name.strip(), tail.strip())
+        if config is None:
+            return {
+                "ok": False,
+                "message": "Usage: /mcp add stdio <name> <command> args...  |  "
+                "/mcp add http <name> <url>",
+            }
+        try:
+            names = await register_mcp_server(mcp, config, agent.tools)
+        except Exception as exc:  # noqa: BLE001 — surface connect failures to the client
+            return {
+                "ok": False,
+                "message": f"Failed to connect MCP server: {type(exc).__name__}: {exc}",
+            }
+        return {"ok": True, "action": "added", "name": config.name, "tools": names}
+
+    if sub == "list":
+        servers: list[dict[str, Any]] = []
+        for server_name in mcp.servers:
+            tools = [
+                t.name for t in agent.tools.all() if getattr(t, "server", None) == server_name
+            ]
+            servers.append({"name": server_name, "tools": tools})
+        return {"ok": True, "action": "list", "servers": servers}
+
+    if sub == "remove":
+        if not subarg:
+            return {"ok": False, "message": "Usage: /mcp remove <name>"}
+        if not mcp.is_connected(subarg):
+            return {"ok": False, "message": f"Not connected: {subarg}"}
+        unregister_mcp_server(subarg, agent.tools)
+        try:
+            await mcp.remove_server(subarg)
+        except Exception as exc:  # noqa: BLE001 — removal must not crash the client
+            return {
+                "ok": False,
+                "message": f"Failed to remove: {type(exc).__name__}: {exc}",
+            }
+        return {"ok": True, "action": "removed", "name": subarg}
+
+    return {"ok": False, "message": "Usage: /mcp add|list|remove  (see /help)"}
 
 
 def session_dict(session: Session) -> dict[str, Any]:

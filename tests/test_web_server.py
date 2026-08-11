@@ -522,3 +522,32 @@ def test_ws_ready_reports_mode_and_set_mode_roundtrip(tmp_path, make_provider) -
             err = _recv_until(ws, "mode_error")[-1]
             assert err["type"] == "mode_error"
             assert "bogus" in err["message"]
+
+
+# --------------------------------------------------------------------------
+# WebSocket: MCP commands
+# --------------------------------------------------------------------------
+
+
+def test_ws_mcp_command_roundtrip(tmp_path, make_provider) -> None:
+    fixture = str(Path(__file__).parent / "fixtures" / "mcp_server.py")
+    with _client(tmp_path, make_provider) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ready
+            ws.send_json(
+                {"type": "command", "name": "mcp", "arg": f"add stdio demo {fixture}"}
+            )
+            result = _recv_until(ws, "command_result")[-1]
+            assert result["name"] == "mcp" and result["ok"] is True
+            assert result["payload"]["action"] == "added"
+            assert "mcp_demo_add" in result["payload"]["tools"]
+
+            ws.send_json({"type": "command", "name": "mcp", "arg": "list"})
+            listed = _recv_until(ws, "command_result")[-1]
+            demo = next(s for s in listed["payload"]["servers"] if s["name"] == "demo")
+            assert len(demo["tools"]) == 3
+
+            ws.send_json({"type": "command", "name": "mcp", "arg": "remove demo"})
+            result = _recv_until(ws, "command_result")[-1]
+            assert result["ok"] is True
+            assert result["payload"]["action"] == "removed"

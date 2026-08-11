@@ -70,6 +70,11 @@ every `write_file` made after that point) and **分叉** (fork the history into 
 new child session). The frontend is vanilla HTML/CSS/JS and works offline — no
 CDN. Runs are per-tab; all sessions share one SQLite store.
 
+**MCP** in the browser: `/mcp add stdio <name> <command> args...` /
+`/mcp add http <name> <url>` connect external MCP servers (per tab), their
+tools register as `mcp_<server>_<tool>` and run through the normal approval
+pipeline; `/mcp list` and `/mcp remove <name>` manage them.
+
 Permission modes: **计划** runs only tools the policy allows unconditionally
 (read-only planning; mutations are blocked), **手动确认** is the default
 ASK policy, **自动** auto-approves everything except explicit `deny` rules, and

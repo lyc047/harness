@@ -408,6 +408,9 @@
       appendUserMessage(line);
       send({ type: 'command', name: 'clear' });
       clearTranscript();
+    } else if (name === 'mcp') {
+      appendUserMessage(line);
+      send({ type: 'command', name: 'mcp', arg: arg });
     } else if (name === 'plan') {
       if (!arg) { appendSystemBubble('Usage: /plan <goal>'); return; }
       appendUserMessage(line);
@@ -462,6 +465,25 @@
           row.appendChild(btn);
           el.appendChild(row);
         });
+      }
+    } else if (name === 'mcp') {
+      if (!data.ok) {
+        el.textContent = '⚠️ ' + (data.message || 'mcp command failed');
+      } else if (data.action === 'added') {
+        el.textContent = '✅ Connected ' + data.name + ' — ' +
+          (data.tools || []).length + ' tools: ' + (data.tools || []).join(', ');
+      } else if (data.action === 'removed') {
+        el.textContent = '✅ Removed ' + data.name;
+      } else if (data.action === 'list') {
+        const servers = data.servers || [];
+        el.textContent = servers.length
+          ? 'MCP servers:\n' + servers.map(function (s) {
+              return '  ' + s.name + ' — ' + (s.tools || []).length +
+                ' tools: ' + (s.tools || []).join(', ');
+            }).join('\n')
+          : 'No MCP servers connected.  Use /mcp add stdio <name> <command> ...';
+      } else {
+        el.textContent = data.message || 'mcp command result';
       }
     }
     els.transcript.appendChild(el);

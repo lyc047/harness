@@ -587,6 +587,29 @@ async def test_runtime_set_mode_emits_mode_changed(make_provider, tmp_path) -> N
     await store.close()
 
 
+async def test_runtime_mcp_add_list_remove(make_provider, tmp_path) -> None:
+    fixture = str(Path(__file__).parent / "fixtures" / "mcp_server.py")
+    rt, store = await _make_runtime(tmp_path, make_provider, [LLMResponse(final_text="x")])
+
+    added = await rt.handle_command("mcp", f"add stdio demo {fixture}")
+    assert added is not None and added["ok"] is True
+    assert added["action"] == "added"
+    assert {"mcp_demo_add", "mcp_demo_echo", "mcp_demo_fail"} <= set(added["tools"])
+
+    listed = await rt.handle_command("mcp", "list")
+    assert listed is not None and listed["ok"] is True
+    demo = next(s for s in listed["servers"] if s["name"] == "demo")
+    assert len(demo["tools"]) == 3
+
+    removed = await rt.handle_command("mcp", "remove demo")
+    assert removed is not None and removed["ok"] is True
+    assert removed["action"] == "removed"
+    names = rt.stack.agent.tools.names()
+    assert not any(n.startswith("mcp_demo_") for n in names)
+    await rt.shutdown()
+    await store.close()
+
+
 async def test_runtime_auto_mode_run_skips_approval(make_provider, tmp_path) -> None:
     target = tmp_path / "auto.txt"
     script = [

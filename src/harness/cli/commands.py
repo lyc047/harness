@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
 from rich.console import Console
 from rich.panel import Panel
 
@@ -16,8 +14,8 @@ from harness.planning.executor import PlanDone, PlanExecutor, PlanRevised, StepE
 from harness.planning.planner import Planner
 from harness.safety.permissions import Permissions
 from harness.skills.registry import SkillRegistry
-from harness.tools.mcp.client import MCPClientManager, MCPServerConfig
-from harness.tools.mcp.manager import register_mcp_server, unregister_mcp_server
+from harness.tools.mcp.client import MCPClientManager
+from harness.tools.mcp.manager import build_mcp_config, register_mcp_server, unregister_mcp_server
 
 HELP_TEXT = """\
 Commands:
@@ -174,23 +172,9 @@ async def _mcp_command(
 
     if sub == "add":
         transport, _, rest = subarg.partition(" ")
-        transport = transport.strip().lower()
         name, _, tail = rest.partition(" ")
-        name = name.strip()
-        tail = tail.strip()
-
-        if transport == "stdio" and name and tail:
-            parts = tail.split()
-            command, args = parts[0], parts[1:]
-            if command.endswith(".py"):
-                # Windows can't exec a .py directly; run it with the current
-                # interpreter so `/mcp add stdio demo python path/server.py`
-                # and `/mcp add stdio demo path/server.py` both work.
-                command, args = sys.executable, [parts[0], *parts[1:]]
-            config = MCPServerConfig(name=name, transport="stdio", command=command, args=args)
-        elif transport == "http" and name and tail:
-            config = MCPServerConfig(name=name, transport="http", url=tail)
-        else:
+        config = build_mcp_config(transport.strip().lower(), name.strip(), tail.strip())
+        if config is None:
             console.print(
                 "[yellow]Usage:[/] /mcp add stdio <name> <command> args...  |  "
                 "/mcp add http <name> <url>"

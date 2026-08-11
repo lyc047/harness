@@ -25,6 +25,7 @@ from harness.observability.logging import get_logger
 from harness.planning.executor import PlanExecutor
 from harness.planning.models import Plan
 from harness.safety.approver import Mode
+from harness.tools.mcp.client import MCPClientManager
 from harness.web import commands
 from harness.web.events import plan_to_dict, serialize_event
 
@@ -117,6 +118,7 @@ class Runtime:
         self._tool_executor = tool_executor
         self._active_session = active_session
         self._mode: Mode = Mode.ASK
+        self._mcp = MCPClientManager()
         self._stack: CoreStack | None = None
         self._run_task: asyncio.Task[None] | None = None
         self._pause_requested = False
@@ -176,7 +178,8 @@ class Runtime:
     async def shutdown(self) -> None:
         """Cancel the run task and wait briefly for it to observe the cancel.
 
-        Does NOT close the shared store — the server lifespan owns that.
+        Closes the connection's own MCP servers (per-connection scope). Does
+        NOT close the shared store — the server lifespan owns that.
         """
         self.cancel()
         if self._run_task is not None:
@@ -184,6 +187,7 @@ class Runtime:
                 await asyncio.wait_for(self._run_task, timeout=1.0)
             except (TimeoutError, asyncio.CancelledError):
                 pass
+        await self._mcp.close()
 
     # -- session handling -- #
 
@@ -262,6 +266,8 @@ class Runtime:
             return commands.skills_payload(stack.skill_registry)
         if name == "permissions":
             return commands.permissions_payload(stack.permissions)
+        if name == "mcp":
+            return await commands.mcp_payload(self._mcp, arg, stack.agent)
         if name == "checkpoints":
             return await commands.checkpoints_payload(self._store)
         if name == "new":

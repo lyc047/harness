@@ -14,10 +14,29 @@ from pathlib import Path
 import pytest
 
 from harness.tools.mcp.client import MCPClientManager, MCPServerConfig
-from harness.tools.mcp.manager import register_mcp_server, unregister_mcp_server
+from harness.tools.mcp.manager import build_mcp_config, register_mcp_server, unregister_mcp_server
 from harness.tools.registry import ToolRegistry
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp_server.py"
+
+
+def test_build_mcp_config() -> None:
+    # stdio with an explicit interpreter + args
+    cfg = build_mcp_config("stdio", "demo", "python server.py --flag")
+    assert cfg is not None and cfg.transport == "stdio"
+    assert cfg.command == "python" and cfg.args == ["server.py", "--flag"]
+    # a bare .py path is rewritten to run under the current interpreter
+    cfg = build_mcp_config("stdio", "demo", str(FIXTURE))
+    assert cfg is not None and cfg.command == sys.executable
+    assert cfg.args == [str(FIXTURE)]
+    # http transport takes the tail as the URL
+    cfg = build_mcp_config("http", "remote", "https://example.com/mcp")
+    assert cfg is not None and cfg.transport == "http"
+    assert cfg.url == "https://example.com/mcp"
+    # invalid shapes yield None
+    assert build_mcp_config("stdio", "demo", "") is None
+    assert build_mcp_config("carrier-pigeon", "demo", "x") is None
+    assert build_mcp_config("http", "", "x") is None
 
 
 def _config(**overrides: object) -> MCPServerConfig:
