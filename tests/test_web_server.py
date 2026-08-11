@@ -498,3 +498,27 @@ def test_ws_rollback_and_branch_roundtrip(tmp_path, make_provider) -> None:
             switched = branch_frames[-1]
             assert switched["session_id"] == created["session"]["id"]
             assert "分支" in created["session"]["name"]
+
+
+# --------------------------------------------------------------------------
+# WebSocket: permission modes
+# --------------------------------------------------------------------------
+
+
+def test_ws_ready_reports_mode_and_set_mode_roundtrip(tmp_path, make_provider) -> None:
+    with _client(tmp_path, make_provider) as client:
+        with client.websocket_connect("/ws") as ws:
+            ready = ws.receive_json()
+            assert ready["type"] == "ready"
+            assert ready["mode"] == "ask"  # connection default is manual confirmation
+
+            ws.send_json({"type": "set_mode", "mode": "auto"})
+            assert _recv_until(ws, "mode_changed")[-1]["mode"] == "auto"
+
+            ws.send_json({"type": "set_mode", "mode": "full"})
+            assert _recv_until(ws, "mode_changed")[-1]["mode"] == "full"
+
+            ws.send_json({"type": "set_mode", "mode": "bogus"})
+            err = _recv_until(ws, "mode_error")[-1]
+            assert err["type"] == "mode_error"
+            assert "bogus" in err["message"]

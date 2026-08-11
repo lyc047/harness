@@ -12,7 +12,7 @@ from harness.core.run_result import RunPaused, RunState
 from harness.core.runner import RunDone, Runner
 from harness.llm.base import LLMResponse
 from harness.memory.session import SessionStore
-from harness.safety.approver import ApprovalExecutor
+from harness.safety.approver import ApprovalExecutor, Mode
 from harness.safety.permissions import Permission, Permissions, Rule
 from harness.tools.base import ToolResult
 
@@ -190,6 +190,112 @@ async def test_approval_no_prompt_fails_closed() -> None:
     result = await executor(Agent(name="a", instructions="i", model="m"), _tc())
     assert result.is_error
     assert "no approver" in result.content
+
+
+# -- permission modes --
+
+def _make_mode_executor(
+    perms: Permissions,
+    *,
+    mode: Mode = Mode.ASK,
+    inner: object | None = None,
+) -> tuple[ApprovalExecutor, list[ToolCall], list[ToolCall]]:
+    """Build an ApprovalExecutor over a recording inner; track prompt calls too."""
+    calls: list[ToolCall] = []
+    prompts: list[ToolCall] = []
+
+    async def recording_inner(agent: Agent, tool_call: ToolCall) -> ToolResult:
+        calls.append(tool_call)
+        return ToolResult.ok("ok")
+
+    async def recording_prompt(tc: ToolCall) -> str:
+        prompts.append(tc)
+        return "y"
+
+    executor = ApprovalExecutor(
+        inner or recording_inner,  # type: ignore[arg-type]
+        perms,
+        prompt=recording_prompt,
+        mode=mode,
+    )
+    return executor, calls, prompts
+
+
+def _agent() -> Agent:
+    return Agent(name="a", instructions="i", model="m")
+
+
+async def test_mode_auto_auto_approves_ask() -> None:
+    executor, calls, prompts = _make_mode_executor(
+        Permissions(rules=[Rule("bash", Permission.ASK)]), mode=Mode.AUTO
+    )
+    result = await executor(_agent(), _tc())
+    assert not result.is_error
+    assert len(calls) == 1
+    assert prompts == []
+
+
+async def test_mode_auto_respects_deny() -> None:
+    executor, calls, prompts = _make_mode_executor(
+        Permissions(rules=[Rule("bash", Permission.DENY)]), mode=Mode.AUTO
+    )
+    result = await executor(_agent(), _tc())
+    assert result.is_error
+    assert "denied" in result.content
+    assert calls == []
+    assert prompts == []
+
+
+async def test_mode_plan_reads_allow_mutations_denied() -> None:
+    executor, calls, prompts = _make_mode_executor(
+        Permissions.default_harness(), mode=Mode.PLAN
+    )
+    # read_file is explicitly allowed by the default policy → runs without a prompt
+    result = await executor(_agent(), _tc("read_file"))
+    assert not result.is_error
+    assert len(calls) == 1
+    # write_file is only ASK under the policy → plan mode blocks it
+    result = await executor(_agent(), _tc("write_file"))
+    assert result.is_error
+    assert "denied" in result.content
+    assert len(calls) == 1
+    assert prompts == []
+
+
+async def test_mode_plan_respects_explicit_allow() -> None:
+    executor, calls, _prompts = _make_mode_executor(
+        Permissions(rules=[Rule("bash", Permission.ALLOW)]), mode=Mode.PLAN
+    )
+    result = await executor(_agent(), _tc())
+    assert not result.is_error
+    assert len(calls) == 1
+
+
+async def test_mode_full_overrides_deny() -> None:
+    executor, calls, prompts = _make_mode_executor(
+        Permissions(rules=[Rule("bash", Permission.DENY)]), mode=Mode.FULL
+    )
+    result = await executor(_agent(), _tc())
+    assert not result.is_error
+    assert len(calls) == 1
+    assert prompts == []
+
+
+async def test_set_mode_switches_behavior() -> None:
+    executor, calls, prompts = _make_mode_executor(
+        Permissions(rules=[Rule("bash", Permission.ASK)])
+    )
+    assert executor.mode is Mode.ASK
+    result = await executor(_agent(), _tc())
+    assert not result.is_error
+    assert len(prompts) == 1  # ASK mode prompts
+
+    executor.set_mode(Mode.AUTO)
+    assert executor.mode is Mode.AUTO
+    result = await executor(_agent(), _tc())
+    assert not result.is_error
+    assert len(prompts) == 1  # no new prompt
+    assert len(calls) == 2
 
 
 # -- pause / resume --

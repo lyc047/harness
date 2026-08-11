@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from enum import StrEnum
 
 from harness.core.agent import Agent
 from harness.core.messages import ToolCall
@@ -32,6 +33,27 @@ logger = get_logger("safety")
 ApprovalPrompt = Callable[[ToolCall], Awaitable[str]]
 
 
+class Mode(StrEnum):
+    """Connection-level approval modes, most restrictive first.
+
+    The active mode rewrites the raw policy decision before the executor acts:
+
+    * ``PLAN`` — only tools the policy allows unconditionally (``read_file``,
+      ``glob``, ``grep`` under the default policy) run; everything else is
+      blocked, so the agent can investigate and plan but not mutate anything.
+    * ``ASK`` — the default: ASK-decided tools prompt a human (y/n/a/p/e).
+    * ``AUTO`` — ASK-decided tools run without prompting; explicit DENY rules
+      still block as a safety backstop.
+    * ``FULL`` — every call is allowed, overriding even explicit DENY rules
+      (the sandbox boundary itself is unchanged).
+    """
+
+    PLAN = "plan"
+    ASK = "ask"
+    AUTO = "auto"
+    FULL = "full"
+
+
 class ApprovalExecutor:
     """Wrap a :class:`ToolExecutor` with permission checks and approval."""
 
@@ -42,15 +64,36 @@ class ApprovalExecutor:
         *,
         prompt: ApprovalPrompt | None = None,
         on_pause: Callable[[], None] | None = None,
+        mode: Mode = Mode.ASK,
     ) -> None:
         self._inner = inner
         self._permissions = permissions
         self._prompt = prompt
         self._on_pause = on_pause
         self._session_allowed: set[str] = set()
+        self._mode = mode
+
+    @property
+    def mode(self) -> Mode:
+        """The active approval mode (switchable at runtime via :meth:`set_mode`)."""
+        return self._mode
+
+    def set_mode(self, mode: Mode) -> None:
+        """Switch the approval mode; applies from the next tool call on."""
+        self._mode = mode
+
+    def _apply_mode(self, decision: Permission) -> Permission:
+        """Rewrite the policy decision for the active mode (no-op in ASK mode)."""
+        if self._mode is Mode.FULL:
+            return Permission.ALLOW
+        if self._mode is Mode.AUTO and decision is Permission.ASK:
+            return Permission.ALLOW
+        if self._mode is Mode.PLAN and decision is not Permission.ALLOW:
+            return Permission.DENY
+        return decision
 
     async def __call__(self, agent: Agent, tool_call: ToolCall) -> ToolResult:
-        decision = self._permissions.decide(tool_call)
+        decision = self._apply_mode(self._permissions.decide(tool_call))
         if decision is Permission.ALLOW:
             return await self._inner(agent, tool_call)
         if decision is Permission.DENY:

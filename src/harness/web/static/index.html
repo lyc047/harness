@@ -19,6 +19,12 @@
 <main id="main">
   <div id="statusbar">
     <span id="status-pill" class="pill">connecting…</span>
+    <select id="mode-select" class="mode-select" title="权限模式" disabled>
+      <option value="plan">计划</option>
+      <option value="ask" selected>手动确认</option>
+      <option value="auto">自动</option>
+      <option value="full">完全放开</option>
+    </select>
     <span id="model-label"></span>
   </div>
   <div id="plan-panel" hidden></div>

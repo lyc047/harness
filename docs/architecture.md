@@ -127,6 +127,18 @@ browser (vanilla JS SPA) ⇄ FastAPI/uvicorn ⇄ per-connection Runtime ⇄ Runn
   session (`parent_session_id` recorded, `· 分支`-suffixed default name) and
   switches to it. Files stay shared across the branch — both sessions see the
   same workspace.
+- **Permission modes** — a status-bar switcher (计划/手动确认/自动/完全放开)
+  rewrites the approval decision on the connection's `ApprovalExecutor`. The
+  `Mode` enum (`safety/approver.py`) maps: **plan** blocks everything the policy
+  does not explicitly allow (read-only planning — reads pass, mutations return a
+  blocked error to the model), **ask** is the default ASK dialog behavior,
+  **auto** auto-approves ASK decisions while explicit `deny` rules still block,
+  and **full** forces every call through regardless of policy (the sandbox
+  boundary is unchanged — isolation still applies). The mode is per-connection,
+  in-memory only (resets to `ask` on reconnect), and takes effect from the next
+  tool call, so a running turn keeps its current approvals. `ready` reports the
+  active mode; `{type:"set_mode"}` + the `mode_changed` frame keep the dropdown
+  in sync.
 - **Frontend** is four hand-written files (no build step, no CDN): a markdown
   renderer that is escape-first (`escapeHtml` before any inline/block transform,
   `safeUrl` whitelisting http/https) so model/tool text is never injected as

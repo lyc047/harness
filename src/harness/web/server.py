@@ -156,6 +156,7 @@ def create_app(
                     "model": settings.model,
                     "sandbox_mode": settings.sandbox_mode,
                     "permissions_default": rt.stack.permissions.default.value,
+                    "mode": rt.mode,
                     "max_turns": settings.max_turns,
                 }
             )
@@ -224,6 +225,12 @@ async def _dispatch(websocket: WebSocket, rt: Runtime, msg: dict[str, Any]) -> N
         await rt.branch(step)
     elif mtype == "cancel":
         rt.cancel()
+    elif mtype == "set_mode":
+        mode = str(msg.get("mode", ""))
+        if not await rt.set_mode(mode):
+            await rt._emit(  # noqa: SLF001
+                {"type": "mode_error", "message": f"unknown mode: {mode}"}
+            )
     elif mtype == "command":
         name = str(msg.get("name", ""))
         arg = str(msg.get("arg", ""))

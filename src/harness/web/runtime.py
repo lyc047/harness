@@ -24,6 +24,7 @@ from harness.memory.store import Store
 from harness.observability.logging import get_logger
 from harness.planning.executor import PlanExecutor
 from harness.planning.models import Plan
+from harness.safety.approver import Mode
 from harness.web import commands
 from harness.web.events import plan_to_dict, serialize_event
 
@@ -115,6 +116,7 @@ class Runtime:
         self._provider = provider
         self._tool_executor = tool_executor
         self._active_session = active_session
+        self._mode: Mode = Mode.ASK
         self._stack: CoreStack | None = None
         self._run_task: asyncio.Task[None] | None = None
         self._pause_requested = False
@@ -163,6 +165,11 @@ class Runtime:
         return self._active_session
 
     @property
+    def mode(self) -> str:
+        """The connection's current approval mode (per-connection, not persisted)."""
+        return self._mode.value
+
+    @property
     def current_plan(self) -> Plan | None:
         return self._current_plan
 
@@ -186,6 +193,23 @@ class Runtime:
         if existing is None:
             return False
         self._active_session = session_id
+        return True
+
+    async def set_mode(self, mode: str) -> bool:
+        """Switch the approval mode; False if the value is unknown.
+
+        The mode is connection-scoped (defaults back to ASK on the next
+        connection). It takes effect on the next tool call, so a running
+        turn keeps its current approvals.
+        """
+        try:
+            parsed = Mode(mode)
+        except ValueError:
+            return False
+        self._mode = parsed
+        if self._stack is not None:
+            self._stack.approval.set_mode(parsed)
+        await self._emit({"type": "mode_changed", "mode": parsed.value})
         return True
 
     # -- public controls -- #

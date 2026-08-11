@@ -568,3 +568,56 @@ async def test_runtime_subagent_tool_runs_isolated_session(
     assert len(sessions) == 1
     await rt.shutdown()
     await store.close()
+
+
+# ---- Runtime: permission modes ---- #
+
+
+async def test_runtime_set_mode_emits_mode_changed(make_provider, tmp_path) -> None:
+    rt, store = await _make_runtime(tmp_path, make_provider, [LLMResponse(final_text="x")])
+    assert rt.mode == "ask"  # connection default is manual confirmation
+    assert await rt.set_mode("auto") is True
+    frames = await _collect_frames(rt, until="mode_changed")
+    assert frames[-1]["type"] == "mode_changed"
+    assert frames[-1]["mode"] == "auto"
+    assert rt.mode == "auto"
+    assert await rt.set_mode("bogus") is False
+    assert rt.mode == "auto"
+    await rt.shutdown()
+    await store.close()
+
+
+async def test_runtime_auto_mode_run_skips_approval(make_provider, tmp_path) -> None:
+    target = tmp_path / "auto.txt"
+    script = [
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="w1",
+                    name="write_file",
+                    arguments=json.dumps({"path": str(target), "content": "hi"}),
+                )
+            ]
+        ),
+        LLMResponse(final_text="wrote"),
+    ]
+
+    async def executor(agent, tool_call):  # noqa: ARG001
+        args = tool_call.arguments_dict
+        _write(str(args["path"]), str(args.get("content", "")))
+        return ToolResult.ok("wrote")
+
+    rt, store = await _make_runtime(tmp_path, make_provider, script, tool_executor=executor)
+    # write_file is ASK under the default policy — in auto mode it must run
+    # without an approval_required frame.
+    assert await rt.set_mode("auto") is True
+    await _collect_frames(rt, until="mode_changed")  # drain the switch frame
+
+    rt.start_run("write auto.txt")
+    frames = await _collect_frames(rt, until="run_done")
+    types = [f["type"] for f in frames]
+    assert "approval_required" not in types
+    assert "tool_result" in types
+    assert _read(str(target)) == "hi"
+    await rt.shutdown()
+    await store.close()

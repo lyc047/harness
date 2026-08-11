@@ -14,6 +14,7 @@
   const els = {
     body: document.body,
     statusPill: $('#status-pill'),
+    modeSelect: $('#mode-select'),
     modelLabel: $('#model-label'),
     sessionList: $('#session-list'),
     transcript: $('#transcript'),
@@ -609,6 +610,8 @@
     switch (msg.type) {
       case 'ready':
         state.activeSession = msg.session_id;
+        els.modeSelect.value = msg.mode || 'ask';
+        els.modeSelect.disabled = false;
         els.modelLabel.textContent =
           'model ' + msg.model + ' · sandbox ' + msg.sandbox_mode +
           ' · permissions ' + msg.permissions_default + ' · max_turns ' + msg.max_turns;
@@ -662,6 +665,9 @@
         break;
       case 'session_renamed':
         refreshSessions();
+        break;
+      case 'mode_changed':
+        els.modeSelect.value = msg.mode;
         break;
       case 'session_switched':
         state.activeSession = msg.session_id;
@@ -758,6 +764,10 @@
     btn.addEventListener('click', function () {
       submitDecision(btn.dataset.decision);
     });
+  });
+
+  els.modeSelect.addEventListener('change', function () {
+    send({ type: 'set_mode', mode: els.modeSelect.value });
   });
 
   els.editToggle.addEventListener('click', function () {

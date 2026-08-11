@@ -60,14 +60,21 @@ uv run harness --help
 `uv run harness serve` starts FastAPI/uvicorn (REST + WebSocket + static files)
 with **no build step**. It shares the exact same core stack as the CLI, so the
 two surfaces never drift. Features: session sidebar (create/switch/resume, with
-auto-named titles — double-click a title to rename), streaming markdown
-messages with a collapsible thinking panel, tool-call cards showing the command
-+ stdout/stderr, an approval dialog (`y`/`n`/`a`/`p`/edit args), pause/resume
-checkpoints, `/plan` streaming with step tracking, and per-message **回退**
-(roll back the conversation and undo every `write_file` made after that point)
-and **分叉** (fork the history into a new child session). The frontend is
-vanilla HTML/CSS/JS and works offline — no CDN. Runs are per-tab; all sessions
-share one SQLite store.
+auto-named titles — double-click a title to rename), a status-bar **permission
+mode switcher** (计划 / 手动确认 / 自动 / 完全放开, per connection, defaulting
+to manual confirmation), streaming markdown messages with a collapsible thinking
+panel, tool-call cards showing the command + stdout/stderr, an approval dialog
+(`y`/`n`/`a`/`p`/edit args), pause/resume checkpoints, `/plan` streaming with
+step tracking, and per-message **回退** (roll back the conversation and undo
+every `write_file` made after that point) and **分叉** (fork the history into a
+new child session). The frontend is vanilla HTML/CSS/JS and works offline — no
+CDN. Runs are per-tab; all sessions share one SQLite store.
+
+Permission modes: **计划** runs only tools the policy allows unconditionally
+(read-only planning; mutations are blocked), **手动确认** is the default
+ASK policy, **自动** auto-approves everything except explicit `deny` rules, and
+**完全放开** allows every call, overriding even `deny` rules (the sandbox
+boundary itself is unchanged).
 
 REST + WS API (all `json`):
 
@@ -81,6 +88,7 @@ REST + WS API (all `json`):
 | `{type:"pause"\|"resume"\|"cancel"}` | run control |
 | `{type:"rollback","step":N}` | roll back conversation + code to step N |
 | `{type:"branch","step":N}` | fork a new session from step N |
+| `{type:"set_mode","mode":"plan\|ask\|auto\|full"}` | switch the connection's permission mode |
 | `{type:"command","name":…}` | slash commands |
 
 ### REPL commands

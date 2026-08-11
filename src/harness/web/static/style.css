@@ -161,6 +161,19 @@ body[data-phase="connecting"] .pill { color: var(--text-dim); animation: pulse 1
 
 @keyframes pulse { 50% { opacity: 0.4; } }
 
+.mode-select {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 4px;
+  cursor: pointer;
+}
+.mode-select:disabled { opacity: 0.5; cursor: default; }
+.mode-select:focus { outline: none; border-color: var(--accent-dim); }
+
 /* ---------- transcript ---------- */
 
 #transcript {
