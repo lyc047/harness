@@ -248,6 +248,9 @@ def test_delegation_protocol_attached_to_parent() -> None:
     assert "before judging the result" in agent.instructions
     # the parent decides on the subagent's RECOMMENDED NEXT STEP (router role)
     assert "router" in agent.instructions
+    # ...and it can request a next-step recommendation explicitly, because the
+    # contract only encourages the subagent to volunteer one
+    assert "ask for it explicitly" in agent.instructions
 
 
 def test_subagents_carry_delivery_contract() -> None:

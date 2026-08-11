@@ -54,7 +54,10 @@ before judging the result — don't judge from the summary alone.
 
 If the delivery includes a RECOMMENDED NEXT STEP (a file to read, a subagent
 to hand off to), treat it as advice — you are the router and you decide. Act
-on it if it serves the user's goal; ignore or redirect it if it doesn't.
+on it if it serves the user's goal; ignore or redirect it if it doesn't. If
+you want a handoff suggestion, ask for it explicitly in `expected_output`
+(e.g. "include a RECOMMENDED NEXT STEP") — an explicit request is more
+reliable than hoping the subagent volunteers one.
 """
 
 
