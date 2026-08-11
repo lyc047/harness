@@ -48,10 +48,10 @@ DEEPSEEK_API_KEY=sk-...
 ```bash
 uv run harness chat                 # interactive REPL
 uv run harness chat --session <id>  # resume a session
-uv run harness chat --subagents     # enable subagents (researcher/coder/frontend_design/doc_writer)
+uv run harness chat --subagents     # enable subagents (researcher/coder/frontend_design/doc_writer/search/file_handler)
 uv run harness serve                # Codex-style web UI → http://127.0.0.1:8000
 uv run harness serve --port 9000 --reload   # dev (auto-reloads on edits)
-uv run harness serve --subagents            # enable subagents in the web UI (researcher/coder/frontend_design/doc_writer)
+uv run harness serve --subagents            # enable subagents in the web UI (researcher/coder/frontend_design/doc_writer/search/file_handler)
 uv run harness --help
 ```
 

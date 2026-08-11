@@ -20,7 +20,14 @@ from harness.core.hooks import Hooks
 from harness.core.messages import ToolCall
 from harness.memory.store import Store
 
-SUBAGENTS = {"researcher", "coder", "frontend_design", "doc_writer"}
+SUBAGENTS = {
+    "researcher",
+    "coder",
+    "frontend_design",
+    "doc_writer",
+    "search",
+    "file_handler",
+}
 
 
 async def _auto_approve(_tc: ToolCall) -> str:

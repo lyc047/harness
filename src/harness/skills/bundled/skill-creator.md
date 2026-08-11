@@ -127,7 +127,8 @@ around the same time:
   `<workspace>/iteration-N/eval-<ID>/with_skill/outputs/`.
 - **Baseline run**: delegate the *same prompt* to a fresh subagent that does
   NOT have the skill (`delegate_to_researcher` / `delegate_to_coder` /
-  `delegate_to_frontend_design` / `delegate_to_doc_writer` — pick whichever
+  `delegate_to_frontend_design` / `delegate_to_doc_writer` /
+  `delegate_to_search` / `delegate_to_file_handler` — pick whichever
   fits), asking it to save outputs to
   `<workspace>/iteration-N/eval-<ID>/without_skill/outputs/`.
 - When **improving an existing skill**, first snapshot it

@@ -172,7 +172,14 @@ def test_example_subagents_include_design_and_writer() -> None:
     from harness.agents.examples import example_subagents
 
     subs = {s.name: s for s in example_subagents()}
-    assert {"researcher", "coder", "frontend_design", "doc_writer"} <= set(subs)
+    assert {
+        "researcher",
+        "coder",
+        "frontend_design",
+        "doc_writer",
+        "search",
+        "file_handler",
+    } <= set(subs)
 
     for name, marker in {
         "frontend_design": "Frontend Design",

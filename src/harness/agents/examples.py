@@ -57,6 +57,33 @@ a short summary of the document produced, its path, and any open questions
 for the user.
 """
 
+SEARCH_INSTRUCTIONS = """\
+You are a search subagent. Your job is to LOCATE things in the workspace, not
+to analyze them. Use glob_files, grep_files and bash (find/grep) to answer
+"where is X", "which files contain Y", "what matches this pattern".
+
+Report exact file paths and line numbers, with at most one line of surrounding
+context each. Do not synthesize, evaluate, or recommend — the parent does that.
+If something is not found, say so explicitly instead of guessing. Keep the
+list tight and under 200 words.
+"""
+
+FILE_HANDLER_INSTRUCTIONS = """\
+You are a file-handling subagent. You work on files that are data, config, or
+documents — NOT code (code belongs to the coder subagent). Typical tasks:
+
+- read a batch of files and summarize what is in each;
+- convert between formats: JSON / YAML / TOML / CSV / markdown tables;
+- fix encodings and line endings;
+- extract, merge, split, or reorder sections of a file;
+- bulk rename, dedupe, or clean up files with bash.
+
+Preserve content semantics unless the task says otherwise. Use read_file,
+write_file and bash; verify your changes (re-read or run a check) before
+finishing. Return a short summary: what you did, the file paths touched, and
+what changed.
+"""
+
 
 def _load_subagent_skill(name: str) -> str:
     """Read a subagent skill markdown file (frontmatter stripped).
@@ -173,6 +200,44 @@ def doc_writer() -> Subagent:
     )
 
 
+def search() -> Subagent:
+    return Subagent(
+        name="search",
+        description=(
+            "Use when the task is to locate things in the workspace — find "
+            "files, grep for symbols or text, match glob patterns. For locating "
+            "work, delegate to search by default; it keeps the searching out of "
+            "your context and returns exact paths."
+        ),
+        instructions=_with_delivery(SEARCH_INSTRUCTIONS),
+        tools=builtin_registry(),
+        max_turns=6,
+    )
+
+
+def file_handler() -> Subagent:
+    return Subagent(
+        name="file_handler",
+        description=(
+            "Use when the task is handling files that are not code — reading a "
+            "batch of files and summarizing, converting formats (JSON/YAML/CSV/"
+            "markdown), fixing encodings or line endings, extracting or merging "
+            "sections, bulk renames or cleanup. For file chores, delegate to "
+            "file_handler by default; it keeps bulk file work out of your context."
+        ),
+        instructions=_with_delivery(FILE_HANDLER_INSTRUCTIONS),
+        tools=builtin_registry(),
+        max_turns=8,
+    )
+
+
 def example_subagents() -> list[Subagent]:
     """The default subagent set shown in the CLI /docs."""
-    return [researcher(), coder(), frontend_design(), doc_writer()]
+    return [
+        researcher(),
+        coder(),
+        frontend_design(),
+        doc_writer(),
+        search(),
+        file_handler(),
+    ]
