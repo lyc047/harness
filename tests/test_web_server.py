@@ -7,7 +7,9 @@ builds its own app/store in a tmp dir so tests never share sessions.
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -17,7 +19,7 @@ from harness.core.runner import ToolExecutor
 from harness.llm.base import LLMResponse
 from harness.memory.store import Store
 from harness.tools.base import ToolResult
-from harness.web.runtime import Runtime, build_runtime
+from harness.web.runtime import Runtime
 from harness.web.server import create_app
 
 
@@ -31,10 +33,27 @@ def _settings(tmp_path: object, **env: str) -> Settings:
     return Settings.from_env(base)
 
 
+class _NamedRuntime(Runtime):
+    """Runtime that pre-names its fresh session on start.
+
+    The auto-title LLM call would otherwise consume a test's first scripted
+    response before the run ever starts. Message-sending tests want a named
+    session; the auto-title/rollback/branch round-trip opts out with
+    ``pre_name=False``.
+    """
+
+    async def start(self) -> None:
+        await super().start()
+        if self.active_session is not None:
+            await self._store.sessions.rename_session(self.active_session, "test")
+
+
 def _make_factory(
     make_provider: object,
     script: list[LLMResponse] | None = None,
     tool_executor: ToolExecutor | None = None,
+    *,
+    pre_name: bool = True,
 ) -> object:
     """Build the ``build_runtime_factory`` seam create_app takes.
 
@@ -50,7 +69,8 @@ def _make_factory(
         active_session: str | None = None,
         **kwargs: object,
     ) -> Runtime:
-        return build_runtime(
+        cls = _NamedRuntime if pre_name else Runtime
+        return cls(
             settings,
             store,
             provider=provider,
@@ -67,6 +87,8 @@ def _client(
     make_provider: object,
     script: list[LLMResponse] | None = None,
     tool_executor: ToolExecutor | None = None,
+    *,
+    pre_name: bool = True,
     **env: str,
 ) -> TestClient:
     settings = _settings(tmp_path, **env)
@@ -74,9 +96,16 @@ def _client(
     app = create_app(
         settings,
         store=store,
-        build_runtime_factory=_make_factory(make_provider, script, tool_executor),  # type: ignore[arg-type]
+        build_runtime_factory=_make_factory(  # type: ignore[arg-type]
+            make_provider, script, tool_executor, pre_name=pre_name
+        ),
     )
     return TestClient(app)
+
+
+def _write(path: str, content: str) -> None:
+    """Sync file write (ASYNC240-clean inside async test executors)."""
+    Path(path).write_text(content, encoding="utf-8")
 
 
 def _recv_until(ws: object, until_type: str, timeout: float = 10.0) -> list[dict]:
@@ -135,6 +164,25 @@ def test_rest_sessions_crud(tmp_path, make_provider) -> None:
         deleted = client.delete(f"/api/sessions/{sid}")
         assert deleted.status_code == 200
         assert client.get("/api/sessions").json()["sessions"] == []
+
+
+def test_rest_session_payload_includes_name_and_patch_rename(tmp_path, make_provider) -> None:
+    with _client(tmp_path, make_provider) as client:
+        created = client.post("/api/sessions").json()["session"]
+        sid = created["id"]
+        assert created["name"] is None
+        assert created["parent_session_id"] is None
+
+        # PATCH rename → list reflects the new name
+        patched = client.patch(f"/api/sessions/{sid}", json={"name": "我的标题"})
+        assert patched.status_code == 200
+        listed = client.get("/api/sessions").json()["sessions"]
+        assert listed[0]["name"] == "我的标题"
+        assert listed[0]["id"] == sid
+
+        # unknown session / blank name → 404 / 422
+        assert client.patch("/api/sessions/nope", json={"name": "x"}).status_code == 404
+        assert client.patch(f"/api/sessions/{sid}", json={"name": "  "}).status_code == 422
 
 
 def test_rest_tools_skills_permissions_help(tmp_path, make_provider) -> None:
@@ -394,3 +442,59 @@ def test_ws_disconnect_then_reconnect(tmp_path, make_provider) -> None:
             ws2.send_json({"type": "message", "content": "hi again"})
             frames = _recv_until(ws2, "run_done")
             assert frames[-1]["result"]["final_output"] == "(no script)"
+
+
+def test_ws_rollback_and_branch_roundtrip(tmp_path, make_provider) -> None:
+    target = tmp_path / "rb.txt"
+    target.write_text("original", encoding="utf-8")
+
+    # script[0] is consumed by the auto-title complete() on the first message.
+    script = [
+        LLMResponse(final_text="排序"),
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="w1",
+                    name="write_file",
+                    arguments=json.dumps({"path": str(target), "content": "v1"}),
+                )
+            ]
+        ),
+        LLMResponse(final_text="wrote v1"),
+    ]
+
+    async def executor(agent, tool_call):  # noqa: ARG001
+        args = tool_call.arguments_dict
+        _write(str(args["path"]), str(args.get("content", "")))
+        return ToolResult.ok("wrote")
+
+    with _client(tmp_path, make_provider, script, executor, pre_name=False) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # ready
+            ws.send_json({"type": "message", "content": "先写入 v1"})
+            frames: list[dict] = []
+            while True:
+                frame = ws.receive_json()
+                frames.append(frame)
+                if frame.get("type") == "approval_required":
+                    ws.send_json({"type": "approval", "decision": "y"})
+                if frame.get("type") == "run_done":
+                    break
+            assert any(f["type"] == "session_renamed" for f in frames)
+            assert target.read_text(encoding="utf-8") == "v1"
+
+            # rollback to step 1 → file back to original, history truncated
+            ws.send_json({"type": "rollback", "step": 1})
+            rb = _recv_until(ws, "rolled_back")[-1]
+            assert rb["session_id"]
+            assert str(target) in rb["restored"]
+            assert target.read_text(encoding="utf-8") == "original"
+
+            # branch from the same point → new child session
+            ws.send_json({"type": "branch", "step": 1})
+            branch_frames = _recv_until(ws, "session_switched")
+            created = next(f for f in branch_frames if f["type"] == "session_created")
+            assert created["session"]["parent_session_id"] == rb["session_id"]
+            switched = branch_frames[-1]
+            assert switched["session_id"] == created["session"]["id"]
+            assert "分支" in created["session"]["name"]

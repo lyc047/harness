@@ -75,16 +75,23 @@ def create_app(
     async def list_sessions(limit: int = 50) -> dict[str, Any]:
         sessions = await app.state.store.sessions.list_sessions(limit=limit)
         return {
-            "sessions": [
-                {"id": s.id, "created_at": s.created_at, "updated_at": s.updated_at}
-                for s in sessions
-            ]
+            "sessions": [commands.session_dict(s) for s in sessions]
         }
 
     @app.post("/api/sessions")
     async def create_session() -> JSONResponse:
         payload = await commands.new_session_payload(app.state.store)
         return JSONResponse(payload, status_code=201)
+
+    @app.patch("/api/sessions/{session_id}")
+    async def rename_session(session_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Rename a session (custom naming; the sidebar double-click editor)."""
+        name = str(body.get("name", "")).strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name is required")
+        if not await app.state.store.sessions.rename_session(session_id, name):
+            raise HTTPException(status_code=404, detail="unknown session")
+        return {"ok": True, "session_id": session_id, "name": name}
 
     @app.get("/api/sessions/{session_id}/messages")
     async def session_messages(session_id: str) -> dict[str, Any]:
@@ -203,6 +210,18 @@ async def _dispatch(websocket: WebSocket, rt: Runtime, msg: dict[str, Any]) -> N
         rt.resume()
     elif mtype == "resume_checkpoint":
         rt.resume_checkpoint(str(msg.get("checkpoint_id", "")))
+    elif mtype == "rollback":
+        try:
+            step = int(msg.get("step", 0))
+        except (TypeError, ValueError):
+            step = 0
+        await rt.rollback(step)
+    elif mtype == "branch":
+        try:
+            step = int(msg.get("step", 0))
+        except (TypeError, ValueError):
+            step = 0
+        await rt.branch(step)
     elif mtype == "cancel":
         rt.cancel()
     elif mtype == "command":

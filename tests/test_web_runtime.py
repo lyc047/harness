@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,7 @@ async def _make_runtime(
     script: list[LLMResponse] | None = None,
     *,
     tool_executor: ToolExecutor | None = None,
+    named: bool = True,
     **env: str,
 ) -> tuple[Runtime, Store]:
     settings = _settings(tmp_path, **env)
@@ -56,6 +58,11 @@ async def _make_runtime(
     provider = make_provider(script)  # type: ignore[operator]
     rt = build_runtime(settings, store, provider=provider, tool_executor=tool_executor)
     await rt.start()
+    # Pre-name the fresh session so the auto-title LLM call can't steal a
+    # scripted response in tests that just want to run a message; the dedicated
+    # auto-title test opts out with named=False.
+    if named and rt.active_session:
+        await store.sessions.rename_session(rt.active_session, "test")
     return rt, store
 
 
@@ -355,6 +362,151 @@ async def test_runtime_set_session_switches_active(make_provider, tmp_path) -> N
     assert rt.active_session == other.id
     assert await rt.set_session("does-not-exist") is False
     assert rt.active_session == other.id
+    await rt.shutdown()
+    await store.close()
+
+
+# ---- Runtime: auto-title / rollback / branch (three-feature plan) ---- #
+
+
+def _write(path: str, content: str) -> None:
+    """Sync file write so the async tests stay ASYNC240-clean."""
+    Path(path).write_text(content, encoding="utf-8")
+
+
+def _read(path: str) -> str:
+    """Sync file read (ASYNC240-clean)."""
+    return Path(path).read_text(encoding="utf-8")
+
+
+async def _auto_approve(rt: Runtime, *, until: str, timeout: float = 5.0) -> list[dict]:
+    """Collect frames, feeding "y" for every approval so tool calls proceed."""
+    frames: list[dict] = []
+    while True:
+        raw = await asyncio.wait_for(rt.outbox.get(), timeout=timeout)
+        frame = json.loads(raw)
+        frames.append(frame)
+        if frame["type"] == "approval_required":
+            rt.decisions.put_nowait("y")
+        if frame["type"] == until:
+            return frames
+
+
+async def test_runtime_auto_titles_unnamed_session(make_provider, tmp_path) -> None:
+    # The first script response is consumed by the auto-title complete() call.
+    script = [
+        LLMResponse(final_text="排序任务"),
+        LLMResponse(final_text="done"),
+    ]
+    rt, store = await _make_runtime(tmp_path, make_provider, script, named=False)
+    rt.start_run("请帮我给这几个文件排序")
+    frames = await _collect_frames(rt, until="session_renamed")
+    renamed = frames[-1]
+    assert renamed["type"] == "session_renamed"
+    assert renamed["session_id"] == rt.active_session
+    assert renamed["name"] == "排序任务"
+    got = await store.sessions.get_session(rt.active_session)
+    assert got is not None and got.name == "排序任务"
+    # A named session does not get re-titled.
+    rt.start_run("再说一句")
+    frames2 = await _collect_frames(rt, until="run_done")
+    assert all(f["type"] != "session_renamed" for f in frames2)
+    await rt.shutdown()
+    await store.close()
+
+
+async def test_runtime_rollback_restores_files_and_truncates(
+    make_provider, tmp_path
+) -> None:
+    target = tmp_path / "rb.txt"
+    _write(str(target), "original")
+    script = [
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="w1",
+                    name="write_file",
+                    arguments=json.dumps({"path": str(target), "content": "v1"}),
+                )
+            ]
+        ),
+        LLMResponse(final_text="wrote v1"),
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="w2",
+                    name="write_file",
+                    arguments=json.dumps({"path": str(target), "content": "v2"}),
+                )
+            ]
+        ),
+        LLMResponse(final_text="wrote v2"),
+    ]
+
+    async def executor(agent, tool_call):  # noqa: ARG001
+        args = tool_call.arguments_dict
+        _write(str(args["path"]), str(args.get("content", "")))
+        return ToolResult.ok("wrote")
+
+    rt, store = await _make_runtime(tmp_path, make_provider, script, tool_executor=executor)
+    # Pre-name the session so the first run doesn't spend a response on auto-title.
+    await store.sessions.rename_session(rt.active_session, "rollback-test")
+
+    rt.start_run("先写入 v1")
+    await _auto_approve(rt, until="run_done")
+    rt.start_run("改成 v2")
+    await _auto_approve(rt, until="run_done")
+    assert _read(str(target)) == "v2"
+
+    await rt.rollback(1)  # to the first user message — both writes are after it
+    frames = await _collect_frames(rt, until="rolled_back")
+    rb = frames[-1]
+    assert rb["type"] == "rolled_back"
+    assert rb["session_id"] == rt.active_session
+    assert rb["to_idx"] == 1  # system@0, user@1
+    assert str(target) in rb["restored"]
+
+    # Workspace is back to the pre-conversation state; history truncated.
+    assert _read(str(target)) == "original"
+    loaded = await store.sessions.load_messages(rt.active_session)
+    assert [m.role for m in loaded] == ["system", "user"]
+    await rt.shutdown()
+    await store.close()
+
+
+async def test_runtime_rollback_invalid_step_emits_error(make_provider, tmp_path) -> None:
+    rt, store = await _make_runtime(tmp_path, make_provider, [LLMResponse(final_text="x")])
+    await rt.rollback(99)
+    frames = await _collect_frames(rt, until="run_error")
+    assert frames[-1]["error_type"] == "invalid_step"
+    await rt.shutdown()
+    await store.close()
+
+
+async def test_runtime_branch_forks_history(make_provider, tmp_path) -> None:
+    script = [
+        LLMResponse(final_text="a1"),
+        LLMResponse(final_text="a2"),
+    ]
+    rt, store = await _make_runtime(tmp_path, make_provider, script)
+    await store.sessions.rename_session(rt.active_session, "parent")
+    rt.start_run("q1")
+    await _collect_frames(rt, until="run_done")
+    rt.start_run("q2")
+    await _collect_frames(rt, until="run_done")
+
+    source = rt.active_session
+    await rt.branch(2)  # fork after the first Q&A (system@0, user@1, assistant@2)
+    frames = await _collect_frames(rt, until="session_switched")
+    created = next(f for f in frames if f["type"] == "session_created")
+    assert created["session"]["parent_session_id"] == source
+    assert created["session"]["name"] == "parent · 分支"
+    switched = frames[-1]
+    assert switched["session_id"] == created["session"]["id"]
+    assert rt.active_session == switched["session_id"]
+
+    forked = await store.sessions.load_messages(switched["session_id"])
+    assert [m.content for m in forked if m.role in ("user", "assistant")] == ["q1", "a1"]
     await rt.shutdown()
     await store.close()
 

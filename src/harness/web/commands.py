@@ -12,6 +12,7 @@ from typing import Any
 
 from harness.core.agent import Agent
 from harness.core.messages import Message
+from harness.memory.session import Session
 from harness.memory.store import Store
 from harness.safety.permissions import Permissions
 from harness.skills.registry import SkillRegistry
@@ -72,16 +73,21 @@ async def checkpoints_payload(store: Store) -> dict[str, Any]:
     }
 
 
+def session_dict(session: Session) -> dict[str, Any]:
+    """Serialize a :class:`Session` for the client (REST + WS frames)."""
+    return {
+        "id": session.id,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "name": session.name,
+        "parent_session_id": session.parent_session_id,
+    }
+
+
 async def new_session_payload(store: Store) -> dict[str, Any]:
     """The ``/new`` command result: create a session and return it."""
     session = await store.sessions.create_session()
-    return {
-        "session": {
-            "id": session.id,
-            "created_at": session.created_at,
-            "updated_at": session.updated_at,
-        }
-    }
+    return {"session": session_dict(session)}
 
 
 async def clear_payload(

@@ -16,6 +16,7 @@ from harness.config import Settings
 from harness.core.agent import Agent
 from harness.core.hooks import Hooks
 from harness.core.runner import PauseCheck, Runner, ToolExecutor, default_executor
+from harness.core.snapshot import SnapshotExecutor
 from harness.llm.base import LLMProvider
 from harness.llm.registry import get_provider
 from harness.memory.preferences import make_remember_preference_tool
@@ -128,7 +129,11 @@ async def build_core_stack(
     # Sandbox: bash runs through the configured provider (local dev default,
     # remote SSH for isolation). Approval wraps it so humans see commands first.
     sandbox = build_sandbox(settings)
-    sandboxed = SandboxedExecutor(tool_executor or default_executor, sandbox)
+    # Pre-write snapshots of every write_file target (rollback support). Sits
+    # inside the sandbox (bash never reaches it) but outside default_executor.
+    base_executor = tool_executor or default_executor
+    base_executor = SnapshotExecutor(base_executor, store.sessions)
+    sandboxed = SandboxedExecutor(base_executor, sandbox)
 
     # Human-in-the-loop: ASK-decided tools consult the injected prompt; "p"
     # pauses after the turn via ``on_pause`` (the caller owns the pause flag).

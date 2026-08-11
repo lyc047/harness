@@ -43,6 +43,7 @@
     currentApproval: null,    // { toolCallId }
     steps: [],                // history-jump timeline: { n, el, preview }
     stepCount: 0,
+    lastActionStep: 0,        // the step the user last rolled back / branched at
   };
 
   let toolCards = {};         // tool_call.id -> { el, output, status }
@@ -489,12 +490,19 @@
           item.className = 'session-item' + (s.id === state.activeSession ? ' active' : '');
 
           const label = document.createElement('span');
-          label.textContent = s.id;
+          label.className = 'session-label' + (s.name ? ' named' : '');
+          label.textContent = s.name || s.id;
+          label.title = s.id + (s.parent_session_id ? ' (分支自 ' + s.parent_session_id + ')' : '');
           label.addEventListener('click', function () {
             if (s.id !== state.activeSession) {
               clearTranscript();
               send({ type: 'set_session', session_id: s.id });
             }
+          });
+          // 双击标题 → 内联重命名(回车/失焦提交,Esc 取消)
+          label.addEventListener('dblclick', function (e) {
+            e.stopPropagation();
+            startRename(s, label);
           });
 
           const del = document.createElement('button');
@@ -515,6 +523,40 @@
         });
       })
       .catch(function () {});
+  }
+
+  function startRename(session, label) {
+    const input = document.createElement('input');
+    input.className = 'rename-input';
+    input.value = session.name || '';
+    input.placeholder = session.id;
+    label.replaceWith(input);
+    input.focus();
+    input.select();
+    const commit = function (ok) {
+      const name = input.value.trim();
+      input.onblur = null;          // 避免 Enter 后 blur 重复提交
+      if (ok && name && name !== (session.name || '')) {
+        fetch('/api/sessions/' + encodeURIComponent(session.id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name })
+        })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); })
+          .then(function () { refreshSessions(); })
+          .catch(function () {
+            appendSystemBubble('重命名失败');
+            refreshSessions();
+          });
+      } else {
+        refreshSessions();
+      }
+    };
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { commit(false); }
+    });
+    input.addEventListener('blur', function () { commit(true); });
   }
 
   function refreshTranscript() {
@@ -618,8 +660,22 @@
       case 'session_created':
         refreshSessions();
         break;
+      case 'session_renamed':
+        refreshSessions();
+        break;
       case 'session_switched':
         state.activeSession = msg.session_id;
+        refreshSessions();
+        refreshTranscript();
+        break;
+      case 'rolled_back':
+        setPhase('idle');
+        appendSystemBubble(
+          '↩ 已回退到第 ' + (state.lastActionStep || msg.to_idx) + ' 步' +
+          (msg.restored && msg.restored.length
+            ? '\n已还原文件:' + msg.restored.map(function (p) { return '\n  · ' + p; }).join('')
+            : '')
+        );
         refreshSessions();
         refreshTranscript();
         break;
@@ -740,6 +796,7 @@
     const step = { n: state.stepCount, el: el, preview: preview };
     state.steps.push(step);
     addStepBadge(el, step.n);
+    addMsgActions(el, step.n);
     renderJumpPanel();
     return step;
   }
@@ -754,6 +811,37 @@
       jumpToStep(n);
     });
     el.appendChild(badge);
+  }
+
+  function addMsgActions(el, n) {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+
+    const rb = document.createElement('button');
+    rb.className = 'msg-action';
+    rb.textContent = '回退';
+    rb.title = '回退到这一步,丢弃之后的对话与文件改动';
+    rb.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!window.confirm('回退到第 ' + n + ' 步?之后的所有对话和代码改动都会被丢弃。')) return;
+      state.lastActionStep = n;
+      send({ type: 'rollback', step: n });
+    });
+
+    const br = document.createElement('button');
+    br.className = 'msg-action';
+    br.textContent = '分叉';
+    br.title = '从此处开始一个继承历史的新会话(共用同一工作区)';
+    br.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!window.confirm('从第 ' + n + ' 步分支出一个新会话?')) return;
+      state.lastActionStep = n;
+      send({ type: 'branch', step: n });
+    });
+
+    actions.appendChild(rb);
+    actions.appendChild(br);
+    el.appendChild(actions);
   }
 
   function renderJumpPanel() {

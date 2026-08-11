@@ -94,6 +94,21 @@ body {
   color: var(--accent);
 }
 .session-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.session-item .session-label.named { color: var(--text); }
+.session-item.active .session-label.named { color: var(--accent); }
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  outline: none;
+}
 
 .session-delete {
   background: transparent;
@@ -424,6 +439,32 @@ body:not([data-phase="idle"]) #input { opacity: 0.55; }
 }
 .message:hover .step-badge { opacity: 1; }
 .step-badge:hover { color: var(--accent); border-color: var(--accent-dim); }
+
+/* rollback / branch hover actions */
+.msg-actions {
+  position: absolute;
+  top: -10px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 6;
+}
+.message.user .msg-actions { right: 4px; }
+.message.assistant .msg-actions { left: 34px; }   /* clear the step badge */
+.message:hover .msg-actions { opacity: 1; }
+
+.msg-action {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.msg-action:hover { color: var(--text); border-color: var(--accent-dim); }
+.msg-actions .msg-action:first-child:hover { color: var(--red); border-color: var(--red); }
 
 .flash { animation: flash-bubble 1.2s ease-out; }
 @keyframes flash-bubble {

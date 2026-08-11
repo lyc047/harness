@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 from harness.config import Settings
 from harness.core.compose import CoreStack, add_example_subagents, build_core_stack
-from harness.core.messages import ToolCall
+from harness.core.messages import Message, ToolCall
 from harness.core.run_result import MaxTurnsExceeded, RunPaused, RunState
 from harness.core.runner import ToolExecutor
 from harness.llm.base import LLMProvider
@@ -29,6 +30,21 @@ from harness.web.events import plan_to_dict, serialize_event
 logger = get_logger("web.runtime")
 
 APPROVAL_TIMEOUT = 300.0
+
+
+def _restore_file(snapshot: dict[str, Any]) -> None:
+    """Sync helper: restore one file to its pre-write state.
+
+    ``existed`` snapshots write the old content back; files created after the
+    rollback point are removed. Kept module-level so the async rollback path
+    doesn't block the loop with raw file I/O (ASYNC240).
+    """
+    path = Path(str(snapshot["path"]))
+    if snapshot["existed"]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(snapshot["content"] or "", encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
 
 
 class WebApprover:
@@ -236,6 +252,89 @@ class Runtime:
             )
         return None
 
+    async def rollback(self, step: int) -> None:
+        """Revert the conversation to ``step`` and undo code written after it.
+
+        The UI step counts only user/assistant bubbles (matching the rendered
+        transcript); it is mapped back to the DB message idx before truncating.
+        Every ``write_file`` after that point is restored from its pre-write
+        snapshot, newest first, so the workspace reflects the earlier state.
+        """
+        self.cancel()
+        session_id = self._active_session
+        if session_id is None:
+            return
+        to_idx = await self._step_to_idx(step)
+        if to_idx is None:
+            await self._emit(
+                {
+                    "type": "run_error",
+                    "message": f"invalid rollback step: {step}",
+                    "error_type": "invalid_step",
+                }
+            )
+            return
+        messages = await self._store.sessions.load_messages(session_id)
+        changed = sorted(
+            (
+                (i, m)
+                for i, m in enumerate(messages)
+                if i > to_idx and m.role == "tool" and m.tool_call_id
+            ),
+            reverse=True,
+        )
+        restored: list[str] = []
+        for _i, msg in changed:
+            if msg.tool_call_id is None:
+                continue
+            snapshot = await self._store.sessions.load_file_snapshot(msg.tool_call_id)
+            if snapshot is None:
+                continue
+            _restore_file(snapshot)
+            restored.append(str(snapshot["path"]))
+        await self._store.sessions.truncate_messages(session_id, to_idx)
+        await self._emit(
+            {
+                "type": "rolled_back",
+                "session_id": session_id,
+                "to_idx": to_idx,
+                "restored": restored,
+            }
+        )
+
+    async def branch(self, step: int) -> None:
+        """Fork the conversation at ``step`` into a new session.
+
+        History [0..step) is copied into a fresh session (marked as a branch of
+        the source) and the connection switches to it. Files are deliberately
+        shared: both sessions see the same workspace.
+        """
+        self.cancel()
+        session_id = self._active_session
+        if session_id is None:
+            return
+        to_idx = await self._step_to_idx(step)
+        if to_idx is None:
+            await self._emit(
+                {
+                    "type": "run_error",
+                    "message": f"invalid branch step: {step}",
+                    "error_type": "invalid_step",
+                }
+            )
+            return
+        new_session = await self._store.sessions.branch_session(
+            session_id, up_to_idx=to_idx
+        )
+        self._active_session = new_session.id
+        await self._emit(
+            {
+                "type": "session_created",
+                "session": commands.session_dict(new_session),
+            }
+        )
+        await self._emit({"type": "session_switched", "session_id": new_session.id})
+
     # -- pause wiring -- #
 
     def _on_pause(self) -> None:
@@ -254,8 +353,79 @@ class Runtime:
             self._run_task.cancel()
         self._run_task = None
 
+    async def _auto_title_if_unnamed(self, content: str) -> None:
+        """Name an unnamed session from its first user message.
+
+        Only fires when the session has no name and no prior user message, i.e.
+        the message starting this turn is the conversation's first. The title is
+        an LLM one-liner (falling back to a truncation); failures never block
+        the turn.
+        """
+        session_id = self._active_session
+        if session_id is None:
+            return
+        session = await self._store.sessions.get_session(session_id)
+        if session is None or session.name:
+            return
+        messages = await self._store.sessions.load_messages(session_id)
+        if any(m.role == "user" for m in messages):
+            return
+        title = await self._summarize_title(content)
+        if not title:
+            return
+        await self._store.sessions.rename_session(session_id, title)
+        await self._emit(
+            {"type": "session_renamed", "session_id": session_id, "name": title}
+        )
+
+    async def _summarize_title(self, content: str) -> str:
+        """One-line LLM title for ``content``; plain truncation on any failure."""
+        try:
+            response = await asyncio.wait_for(
+                self.stack.provider.complete(
+                    [
+                        Message.system(
+                            "把这条用户请求总结成一个不超过20字的标题,"
+                            "直接输出标题本身,不要引号、不要多余文字。"
+                        ),
+                        Message.user(content),
+                    ]
+                ),
+                timeout=15.0,
+            )
+            title = (
+                (response.final_text or "")
+                .strip()
+                .strip('"“”')
+                .replace("\n", " ")
+                .strip()
+            )
+            if title:
+                return title[:60]
+        except Exception:  # noqa: BLE001 — auto-title must never block the turn
+            logger.warning("auto-title failed; using truncation", exc_info=True)
+        fallback = content.strip().replace("\n", " ").strip()
+        return fallback[:20]
+
+    async def _step_to_idx(self, step: int) -> int | None:
+        """Map a UI step number to the DB message idx.
+
+        The frontend counts only user/assistant bubbles (``registerStep``), so
+        we filter the same roles from ``load_messages`` and index 1-based. Returns
+        None when the step is out of range.
+        """
+        session_id = self._active_session
+        if session_id is None:
+            return None
+        messages = await self._store.sessions.load_messages(session_id)
+        rendered = [i for i, m in enumerate(messages) if m.role in ("user", "assistant")]
+        if step < 1 or step > len(rendered):
+            return None
+        return rendered[step - 1]
+
     async def _run_task_coro(self, content: str) -> None:
         stack = self.stack
+        await self._auto_title_if_unnamed(content)
         await self._emit({"type": "run_started", "session_id": self._active_session})
         try:
             async for event in stack.runner.run_streamed(
