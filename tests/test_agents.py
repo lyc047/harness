@@ -223,10 +223,10 @@ def test_subagent_skill_loads_from_bundled() -> None:
     fresh clone with no runtime skills/ directory. (Regression: they used to
     live only in the gitignored runtime skills/, so the test above passed only
     on machines that happened to have the files locally.)"""
-    from harness.agents.examples import _load_subagent_skill
+    from harness.agents.registry import load_subagent_skill
 
-    assert "Frontend Design" in _load_subagent_skill("frontend-design")
-    assert "Doc Co-Authoring Workflow" in _load_subagent_skill("doc-coauthoring")
+    assert "Frontend Design" in load_subagent_skill("frontend-design")
+    assert "Doc Co-Authoring Workflow" in load_subagent_skill("doc-coauthoring")
 
 
 def test_delegation_protocol_attached_to_parent() -> None:
@@ -280,3 +280,103 @@ def test_delegate_tool_descriptions_carry_triggers() -> None:
         assert "by default" in sa.description, (
             f"{sa.name} does not make delegation the default"
         )
+
+
+# ---- YAML subagent registry ---- #
+
+
+def test_subagent_registry_loads_bundled_defaults(tmp_path) -> None:
+    """The six defaults ship as YAML configs in the package source, so a fresh
+    clone gets them even with no runtime skills/ directory."""
+    from harness.agents.registry import BUNDLED_SUBAGENTS_DIR, SubagentRegistry
+
+    reg = SubagentRegistry(tmp_path / "empty", bundled_dir=BUNDLED_SUBAGENTS_DIR)
+    specs = reg.discover()
+    assert {
+        "researcher",
+        "coder",
+        "frontend_design",
+        "doc_writer",
+        "search",
+        "file_handler",
+    } <= {s.name for s in specs}
+
+    researcher = reg.get("researcher")
+    assert researcher is not None
+    assert "Use when" in researcher.description
+    sa = reg.to_subagent(researcher)
+    assert sa.name == "researcher"
+    assert sa.max_turns == 8
+    # the delivery contract is appended uniformly by the materializer
+    assert "WHAT YOU DID" in sa.instructions
+
+
+def test_subagent_registry_runtime_overrides_bundled(tmp_path) -> None:
+    """A same-named YAML in the runtime skills/subagents dir wins over the
+    bundled default (mirrors SkillRegistry's override layering)."""
+    from harness.agents.registry import BUNDLED_SUBAGENTS_DIR, SubagentRegistry
+
+    runtime = tmp_path / "skills" / "subagents"
+    runtime.mkdir(parents=True)
+    (runtime / "researcher.yaml").write_text(
+        "name: researcher\n"
+        "description: Use when X; delegate by default.\n"
+        "instructions: |\n"
+        "  Custom research body.\n"
+        "max_turns: 4\n",
+        encoding="utf-8",
+    )
+
+    reg = SubagentRegistry(runtime, bundled_dir=BUNDLED_SUBAGENTS_DIR)
+    reg.discover()
+    researcher = reg.get("researcher")
+    assert researcher is not None
+    assert researcher.description == "Use when X; delegate by default."
+    assert researcher.max_turns == 4
+    sa = reg.to_subagent(researcher)
+    assert "Custom research body." in sa.instructions
+    assert "WHAT YOU DID" in sa.instructions  # contract still appended
+
+
+def test_subagent_registry_adds_new_subagent_from_yaml(tmp_path) -> None:
+    """A brand-new YAML config registers a subagent with zero Python changes —
+    the point of making the registry declarative."""
+    from harness.agents.registry import BUNDLED_SUBAGENTS_DIR, SubagentRegistry
+
+    runtime = tmp_path / "skills" / "subagents"
+    runtime.mkdir(parents=True)
+    (runtime / "translator.yaml").write_text(
+        "name: translator\n"
+        "description: Use when text needs translating; delegate by default.\n"
+        "instructions: |\n"
+        "  Translate the given text faithfully.\n"
+        "max_turns: 3\n",
+        encoding="utf-8",
+    )
+
+    reg = SubagentRegistry(runtime, bundled_dir=BUNDLED_SUBAGENTS_DIR)
+    reg.discover()
+    spec = reg.get("translator")
+    assert spec is not None
+    sa = reg.to_subagent(spec)
+    assert sa.name == "translator"
+    assert sa.max_turns == 3
+    assert "Translate the given text faithfully." in sa.instructions
+    assert "WHAT YOU DID" in sa.instructions
+
+
+def test_subagent_registry_ignores_invalid_yaml(tmp_path) -> None:
+    """A malformed or non-dict YAML file is skipped, not fatal."""
+    from harness.agents.registry import BUNDLED_SUBAGENTS_DIR, SubagentRegistry
+
+    runtime = tmp_path / "skills" / "subagents"
+    runtime.mkdir(parents=True)
+    (runtime / "broken.yaml").write_text("name: [unclosed\n", encoding="utf-8")
+    (runtime / "scalar.yaml").write_text("just a string\n", encoding="utf-8")
+
+    reg = SubagentRegistry(runtime, bundled_dir=BUNDLED_SUBAGENTS_DIR)
+    reg.discover()
+    assert "broken" not in reg.names()
+    assert "scalar" not in reg.names()
+    # bundled defaults still load alongside
+    assert "researcher" in reg.names()
