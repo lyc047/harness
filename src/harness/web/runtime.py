@@ -119,12 +119,28 @@ class Runtime:
             on_pause=self._on_pause,
             pause_check=self._pause_check,
         )
+        if self._settings.subagents:
+            self._enable_subagents()
         if self._active_session is None:
             sessions = await self._store.sessions.list_sessions(limit=1)
             if sessions:
                 self._active_session = sessions[0].id
             else:
                 self._active_session = (await self._store.sessions.create_session()).id
+
+    def _enable_subagents(self) -> None:
+        """Register the researcher/coder delegate tools on the agent.
+
+        Mirrors the CLI's ``--subagents`` path: the same SubagentTool objects,
+        so the two surfaces share one implementation of multi-agent delegation.
+        Delegate tools land under the default ASK policy, so the user approves
+        each hand-off (and the subagent's own tool calls) in the web dialog.
+        """
+        from harness.agents.examples import example_subagents
+        from harness.agents.orchestrator import add_subagents
+
+        stack = self.stack
+        add_subagents(stack.agent, stack.runner, example_subagents())
 
     @property
     def stack(self) -> CoreStack:

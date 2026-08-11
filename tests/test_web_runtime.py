@@ -357,3 +357,62 @@ async def test_runtime_set_session_switches_active(make_provider, tmp_path) -> N
     assert rt.active_session == other.id
     await rt.shutdown()
     await store.close()
+
+
+# ---- Runtime: subagents ---- #
+
+
+async def test_runtime_subagents_off_by_default(make_provider, tmp_path) -> None:
+    rt, store = await _make_runtime(tmp_path, make_provider, [LLMResponse(final_text="x")])
+    names = rt.stack.agent.tools.names()
+    assert "delegate_to_researcher" not in names
+    assert "delegate_to_coder" not in names
+    await rt.shutdown()
+    await store.close()
+
+
+async def test_runtime_subagents_enabled_by_setting(make_provider, tmp_path) -> None:
+    rt, store = await _make_runtime(
+        tmp_path, make_provider, [LLMResponse(final_text="x")], HARNESS_SUBAGENTS="1"
+    )
+    names = rt.stack.agent.tools.names()
+    assert "delegate_to_researcher" in names
+    assert "delegate_to_coder" in names
+    await rt.shutdown()
+    await store.close()
+
+
+async def test_runtime_subagent_tool_runs_isolated_session(
+    make_provider, tmp_path
+) -> None:
+    """A delegate tool call yields a ToolResult and leaves no session behind."""
+    script = [
+        LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="t1",
+                    name="delegate_to_researcher",
+                    arguments='{"task": "research something"}',
+                )
+            ]
+        ),
+        LLMResponse(final_text="subagent answer"),
+        LLMResponse(final_text="parent done"),
+    ]
+    rt, store = await _make_runtime(
+        tmp_path, make_provider, script, HARNESS_SUBAGENTS="1"
+    )
+    rt.start_run("research something")
+    # delegate_to_researcher is ASK policy — approve the hand-off.
+    rt.decisions.put_nowait("y")
+    frames = await _collect_frames(rt, until="run_done")
+    types = [f["type"] for f in frames]
+    assert "approval_required" in types
+    tool_results = [f for f in frames if f["type"] == "tool_result"]
+    assert tool_results, "expected a delegate tool_result frame"
+    assert "subagent answer" in tool_results[0]["content"]
+    sessions = await store.sessions.list_sessions(limit=10)
+    # The parent run's session only — subagents run with session_id=None.
+    assert len(sessions) == 1
+    await rt.shutdown()
+    await store.close()

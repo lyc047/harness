@@ -54,6 +54,9 @@ class Settings:
     # Permission policy file (TOML); absent => safe defaults
     permissions_file: str = "permissions.toml"
 
+    # Multi-agent orchestration: register researcher/coder delegate tools
+    subagents: bool = False
+
     # Logging / tracing
     log_level: str = "INFO"
     log_file: str = "harness.log"
@@ -121,6 +124,7 @@ class Settings:
             skills_dir=get("HARNESS_SKILLS_DIR", default="skills"),
             memory_dir=get("HARNESS_MEMORY_DIR", default="memory"),
             permissions_file=get("HARNESS_PERMISSIONS_FILE", default="permissions.toml"),
+            subagents=get_bool("HARNESS_SUBAGENTS", False),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),
             log_file=get("HARNESS_LOG_FILE", default="harness.log"),
             trace_file=get("HARNESS_TRACE_FILE", default="harness.trace.jsonl"),

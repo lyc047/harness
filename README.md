@@ -51,6 +51,7 @@ uv run harness chat --session <id>  # resume a session
 uv run harness chat --subagents     # enable researcher/coder subagents
 uv run harness serve                # Codex-style web UI → http://127.0.0.1:8000
 uv run harness serve --port 9000 --reload   # dev (auto-reloads on edits)
+uv run harness serve --subagents            # enable researcher/coder subagents in the web UI
 uv run harness --help
 ```
 

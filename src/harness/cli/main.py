@@ -77,6 +77,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reload", action="store_true", help="Auto-reload on source changes (dev)."
     )
     serve.add_argument("--model", default=None, help="Override the LLM model.")
+    serve.add_argument(
+        "--subagents",
+        action="store_true",
+        help="Enable built-in researcher/coder subagents (manager pattern).",
+    )
     return parser
 
 
@@ -253,6 +258,8 @@ def _run_serve(args: argparse.Namespace) -> int:
         Settings.load(env_path=args.env)  # loads the env file into os.environ
     if args.model:
         os.environ["DEEPSEEK_MODEL"] = args.model
+    if args.subagents:
+        os.environ["HARNESS_SUBAGENTS"] = "1"
     uvicorn.run(
         "harness.web.server:create_app",
         factory=True,
