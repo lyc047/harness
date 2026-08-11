@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from harness.config import Settings
@@ -58,6 +60,24 @@ async def test_local_sandbox_error_exit_code() -> None:
     result = await sandbox.run_command("exit 3")
     assert result.exit_code == 3
     assert not result.timed_out
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
+async def test_local_sandbox_prefers_posix_shell() -> None:
+    """POSIX-only syntax (``$(pwd)``) must run — cmd.exe cannot."""
+    sandbox = LocalSandbox()
+    assert sandbox._bash  # noqa: SLF001 — asserting the bash preference itself
+    result = await sandbox.run_command('cd "$(pwd)" && echo ok')
+    assert result.exit_code == 0
+    assert "ok" in result.stdout
+
+
+def test_decode_falls_back_to_ansi_codepage() -> None:
+    from harness.sandbox.local import _decode
+
+    # GBK bytes for "系统找不到指定的路径。" — cmd.exe ANSI output on zh-CN.
+    gbk = "系统找不到指定的路径。".encode("gbk")
+    assert "系统找不到指定的路径" in _decode(gbk)
 
 
 async def test_local_sandbox_timeout() -> None:
