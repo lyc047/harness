@@ -120,6 +120,7 @@ class Runtime:
         active_session: str | None = None,
     ) -> None:
         self._settings = settings
+        self._advanced = settings.subagent_advanced
         self._store = store
         self.outbox: asyncio.Queue[str] = asyncio.Queue()
         self._approver = WebApprover(self.outbox, timeout=approval_timeout)
@@ -158,20 +159,46 @@ class Runtime:
                 self._active_session = (await self._store.sessions.create_session()).id
 
     def _enable_subagents(self) -> None:
-        """Register the researcher/coder delegate tools on the agent.
+        """Register the delegate tools under the current advanced setting.
 
-        Delegation tools land under the default ASK policy, so the user approves
-        each hand-off (and the subagent's own tool calls) in the web dialog.
-        ``HARNESS_SUBAGENT_MODEL`` lets subagents use a cheaper model tier.
-        Every nested subagent run is forwarded to the client as
-        ``subagent_start``/``subagent_event``/``subagent_end`` frames so the UI
-        can render the subagent's own turns and tools inline.
+        Advanced mode re-registers on toggle via ``_rebuild_subagents``; each
+        connection starts from ``settings.subagent_advanced`` (the
+        ``HARNESS_SUBAGENT_ADVANCED`` env default).
         """
         add_example_subagents(
             self.stack,
             subagent_model=self._settings.subagent_model,
             on_event=self._forward_subagent_event,
+            advanced=self._advanced,
         )
+
+    def _rebuild_subagents(self) -> None:
+        """Unregister and re-register delegate tools for the new advanced value.
+
+        ``add_example_subagents`` re-attaches the (reversible) delegation
+        protocol, so a toggle swaps the protocol variant instead of appending.
+        """
+        for name in list(self.stack.agent.tools.names()):
+            if name.startswith("delegate_to_"):
+                self.stack.agent.tools.unregister(name)
+        self._enable_subagents()
+
+    @property
+    def advanced(self) -> bool:
+        """Whether advanced orchestration (nesting + concurrency) is on."""
+        return self._advanced
+
+    async def set_advanced(self, advanced: bool) -> bool:
+        """Toggle advanced orchestration; effective from the next run.
+
+        Per-connection and in-memory (like the permission mode). Rebuilds the
+        delegate tool set when subagents are enabled.
+        """
+        self._advanced = bool(advanced)
+        if self._settings.subagents:
+            self._rebuild_subagents()
+        await self._emit({"type": "advanced_changed", "advanced": self._advanced})
+        return True
 
     async def _forward_subagent_event(self, run_id: str, agent: str, event: object) -> None:
         """Forward a nested subagent run's event to the client.
@@ -515,7 +542,10 @@ class Runtime:
         await self._emit({"type": "run_started", "session_id": self._active_session})
         try:
             async for event in stack.runner.run_streamed(
-                stack.agent, content, session_id=self._active_session
+                stack.agent,
+                content,
+                session_id=self._active_session,
+                concurrent=self._advanced,
             ):
                 frame = serialize_event(event)
                 if frame is not None:
@@ -608,7 +638,10 @@ class Runtime:
         await self._emit({"type": "resumed", "checkpoint_id": self._last_checkpoint_id})
         try:
             async for event in stack.runner.resume_streamed(
-                stack.agent, state, session_id=state.session_id or self._active_session
+                stack.agent,
+                state,
+                session_id=state.session_id or self._active_session,
+                concurrent=self._advanced,
             ):
                 frame = serialize_event(event)
                 if frame is not None:

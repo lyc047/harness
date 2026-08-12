@@ -169,7 +169,9 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
     if args.subagents:
         from harness.core.compose import add_example_subagents
 
-        add_example_subagents(stack, subagent_model=settings.subagent_model)
+        add_example_subagents(
+            stack, subagent_model=settings.subagent_model, advanced=settings.subagent_advanced
+        )
         delegate_tools = sorted(
             name for name in stack.agent.tools.names() if name.startswith("delegate_to_")
         )
@@ -220,7 +222,9 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
         pause_after_turn[0] = False
         stack.subagent_budget.reset()
         try:
-            async for event in runner.run_streamed(agent, line, session_id=session_id):
+            async for event in runner.run_streamed(
+                agent, line, session_id=session_id, concurrent=settings.subagent_advanced
+            ):
                 render_stream_event(event, console)
         except RunPaused as exc:
             checkpoint_id = await store.sessions.save_checkpoint(exc.state)

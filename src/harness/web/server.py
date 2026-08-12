@@ -157,6 +157,8 @@ def create_app(
                     "sandbox_mode": settings.sandbox_mode,
                     "permissions_default": rt.stack.permissions.default.value,
                     "mode": rt.mode,
+                    "advanced": rt.advanced,
+                    "subagents": settings.subagents,
                     "max_turns": settings.max_turns,
                 }
             )
@@ -234,6 +236,8 @@ async def _dispatch(websocket: WebSocket, rt: Runtime, msg: dict[str, Any]) -> N
             await rt._emit(  # noqa: SLF001
                 {"type": "mode_error", "message": f"unknown mode: {mode}"}
             )
+    elif mtype == "set_advanced":
+        await rt.set_advanced(bool(msg.get("advanced", False)))
     elif mtype == "command":
         name = str(msg.get("name", ""))
         arg = str(msg.get("arg", ""))

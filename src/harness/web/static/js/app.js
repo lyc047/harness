@@ -15,6 +15,7 @@
     body: document.body,
     statusPill: $('#status-pill'),
     modeSelect: $('#mode-select'),
+    advancedToggle: $('#advanced-toggle'),
     modelLabel: $('#model-label'),
     sessionList: $('#session-list'),
     transcript: $('#transcript'),
@@ -831,6 +832,8 @@
         state.activeSession = msg.session_id;
         els.modeSelect.value = msg.mode || 'ask';
         els.modeSelect.disabled = false;
+        els.advancedToggle.checked = !!msg.advanced;
+        els.advancedToggle.disabled = !msg.subagents;
         els.modelLabel.textContent =
           'model ' + msg.model + ' · sandbox ' + msg.sandbox_mode +
           ' · permissions ' + msg.permissions_default + ' · max_turns ' + msg.max_turns;
@@ -900,6 +903,9 @@
         break;
       case 'mode_changed':
         els.modeSelect.value = msg.mode;
+        break;
+      case 'advanced_changed':
+        els.advancedToggle.checked = !!msg.advanced;
         break;
       case 'session_switched':
         state.activeSession = msg.session_id;
@@ -1000,6 +1006,10 @@
 
   els.modeSelect.addEventListener('change', function () {
     send({ type: 'set_mode', mode: els.modeSelect.value });
+  });
+
+  els.advancedToggle.addEventListener('change', function () {
+    send({ type: 'set_advanced', advanced: els.advancedToggle.checked });
   });
 
   els.editToggle.addEventListener('click', function () {

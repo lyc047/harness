@@ -783,3 +783,41 @@ async def test_runtime_auto_mode_run_skips_approval(make_provider, tmp_path) -> 
     assert _read(str(target)) == "hi"
     await rt.shutdown()
     await store.close()
+
+
+# ---- Runtime: advanced orchestration toggle ---- #
+
+
+async def test_runtime_set_advanced_roundtrip(make_provider, tmp_path) -> None:
+    rt, store = await _make_runtime(
+        tmp_path, make_provider, [LLMResponse(final_text="x")], HARNESS_SUBAGENTS="1"
+    )
+    assert rt.advanced is False
+    assert await rt.set_advanced(True) is True
+    frames = await _collect_frames(rt, until="advanced_changed")
+    assert frames[-1]["advanced"] is True
+    assert rt.advanced is True
+    # toggling advanced rebuilds the delegate tool set (unregister + register)
+    tool = rt.stack.agent.tools.get("delegate_to_researcher")
+    assert tool is not None and len(tool._nested_delegates) >= 1
+    # idempotent: toggling again does not duplicate tools (register would raise)
+    assert await rt.set_advanced(False) is True
+    await _collect_frames(rt, until="advanced_changed")
+    tool2 = rt.stack.agent.tools.get("delegate_to_researcher")
+    assert tool2 is not None and tool2._nested_delegates == ()
+    await rt.shutdown()
+    await store.close()
+
+
+async def test_runtime_start_run_resets_budget(make_provider, tmp_path) -> None:
+    rt, store = await _make_runtime(
+        tmp_path, make_provider, [LLMResponse(final_text="x")], HARNESS_SUBAGENTS="1"
+    )
+    rt.stack.subagent_budget.record(20)
+    assert rt.stack.subagent_budget.remaining() == 20  # 40 - 20
+    rt.start_run("go")
+    frames = await _collect_frames(rt, until="run_done")
+    assert frames[-1]["type"] == "run_done"
+    assert rt.stack.subagent_budget.remaining() == 40  # reset at run start
+    await rt.shutdown()
+    await store.close()

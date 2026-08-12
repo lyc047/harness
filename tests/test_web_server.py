@@ -536,6 +536,16 @@ def test_ws_ready_reports_mode_and_set_mode_roundtrip(tmp_path, make_provider) -
             assert "bogus" in err["message"]
 
 
+def test_ws_ready_reports_subagents_and_advanced(tmp_path, make_provider) -> None:
+    with _client(tmp_path, make_provider, HARNESS_SUBAGENTS="1") as client:
+        with client.websocket_connect("/ws") as ws:
+            ready = ws.receive_json()
+            assert ready["subagents"] is True
+            assert ready["advanced"] is False
+            ws.send_json({"type": "set_advanced", "advanced": True})
+            assert _recv_until(ws, "advanced_changed")[-1]["advanced"] is True
+
+
 # --------------------------------------------------------------------------
 # WebSocket: MCP commands
 # --------------------------------------------------------------------------
