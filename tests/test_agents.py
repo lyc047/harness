@@ -411,3 +411,19 @@ def test_subagent_model_tiering_wiring(make_provider) -> None:
     tool_b = agent.tools.get("delegate_to_b")
     assert tool_a is not None and tool_a._model == "cheap-model"
     assert tool_b is not None and tool_b._model == "custom-model"
+
+
+# ---- per-run subagent turn budget ---- #
+
+
+def test_subagent_budget_tracks_and_resets() -> None:
+    from harness.agents.orchestrator import SubagentBudget
+
+    b = SubagentBudget(total=10)
+    assert b.remaining() == 10
+    b.record(3)
+    assert b.remaining() == 7
+    b.record(8)
+    assert b.remaining() == -1  # over-run is recorded, not clamped
+    b.reset()
+    assert b.remaining() == 10

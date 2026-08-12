@@ -258,3 +258,25 @@ def attach_delegation_protocol(agent: Agent) -> None:
     self-contained delegation briefs instead of vague one-liners.
     """
     agent.instructions = f"{agent.instructions.rstrip()}\n\n{DELEGATION_PROTOCOL}"
+
+
+class SubagentBudget:
+    """Per-run budget of subagent turns, shared across nesting levels.
+
+    asyncio is single-threaded, so ``record``/``remaining`` are race-free even
+    when several subagents run concurrently. ``remaining`` may go negative on
+    over-run (a soft guardrail, not a hard cap mid-flight).
+    """
+
+    def __init__(self, total: int) -> None:
+        self._total = total
+        self._used = 0
+
+    def remaining(self) -> int:
+        return self._total - self._used
+
+    def record(self, turns: int) -> None:
+        self._used += turns
+
+    def reset(self) -> None:
+        self._used = 0

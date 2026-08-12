@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from harness.agents.orchestrator import SubagentBudget
 from harness.config import Settings
 from harness.core.agent import Agent
 from harness.core.hooks import Hooks
@@ -108,6 +109,7 @@ class CoreStack:
     approval: ApprovalExecutor
     runner: Runner
     planner: Planner
+    subagent_budget: SubagentBudget
 
 
 async def build_core_stack(
@@ -187,4 +189,5 @@ async def build_core_stack(
         approval=approval,
         runner=runner,
         planner=planner,
+        subagent_budget=SubagentBudget(settings.subagent_budget),
     )

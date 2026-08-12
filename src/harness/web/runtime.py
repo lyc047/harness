@@ -256,6 +256,8 @@ class Runtime:
         """Cancel any active run and start a new one with the given message."""
         self._cancel_current()
         self._approver.drain()
+        if self._stack is not None:
+            self._stack.subagent_budget.reset()
         self._pause_requested = False
         self._run_task = asyncio.create_task(self._run_task_coro(content))
 
@@ -263,6 +265,8 @@ class Runtime:
         """Cancel any active run and start plan generation + execution."""
         self._cancel_current()
         self._approver.drain()
+        if self._stack is not None:
+            self._stack.subagent_budget.reset()
         self._pause_requested = False
         self._run_task = asyncio.create_task(self._plan_task_coro(goal))
 
@@ -279,6 +283,8 @@ class Runtime:
         if self._last_state is not None:
             self._cancel_current()
             self._approver.drain()
+            if self._stack is not None:
+                self._stack.subagent_budget.reset()
             self._pause_requested = False
             self._run_task = asyncio.create_task(self._resume_task_coro(self._last_state))
 
@@ -286,6 +292,8 @@ class Runtime:
         """Resume an arbitrary stored checkpoint by id."""
         self._cancel_current()
         self._approver.drain()
+        if self._stack is not None:
+            self._stack.subagent_budget.reset()
         self._pause_requested = False
         self._run_task = asyncio.create_task(self._resume_checkpoint_coro(checkpoint_id))
 

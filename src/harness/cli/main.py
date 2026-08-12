@@ -218,6 +218,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
         # Run the agent, streaming events. A paused run saves a checkpoint the
         # user can restore later with /resume <id>.
         pause_after_turn[0] = False
+        stack.subagent_budget.reset()
         try:
             async for event in runner.run_streamed(agent, line, session_id=session_id):
                 render_stream_event(event, console)
