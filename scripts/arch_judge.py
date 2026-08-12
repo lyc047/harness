@@ -29,7 +29,11 @@ DIMENSIONS = [
     "Deployability",
     "Risk & evolution",
 ]
-MAX_JUDGE_CHARS = 8000
+# Reports run 15-22 KB; 8k truncated them mid-subsystem and hid the last three
+# mandated sections (Key tech choices / Risks / Evolution) from the judge, which
+# systematically depressed Completeness and Risk scores. 30k covers every report
+# whole. Raises per-call cost (~2.5x input) but keeps judging fair.
+MAX_JUDGE_CHARS = 30000
 
 JUDGE_SYSTEM_PROMPT = """\
 You are a principal systems architect grading a peer's architecture-design report.
