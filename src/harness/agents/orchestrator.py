@@ -19,6 +19,7 @@ from harness.core.run_result import MaxTurnsExceeded
 from harness.core.runner import RunDone, Runner
 from harness.observability.logging import get_logger
 from harness.tools.base import Tool, ToolResult
+from harness.tools.registry import ToolRegistry
 
 logger = get_logger("agents")
 
@@ -89,6 +90,40 @@ DELEGATION_HINT = (
 )
 
 
+def _matches_mcp_allowlist(name: str, allowlist: tuple[str, ...]) -> bool:
+    """Whether a tool name matches any mcp_* entry in the allowlist.
+
+    ``mcp_*`` matches every MCP tool; a trailing ``*`` is a prefix wildcard
+    (``mcp_demo_*`` matches the whole server); anything else matches exactly.
+    """
+    for entry in allowlist:
+        if entry == "mcp_*":
+            return True
+        if entry.endswith("*") and name.startswith(entry[:-1]):
+            return True
+        if name == entry:
+            return True
+    return False
+
+
+def resolve_mcp_tools(
+    subagent: Subagent, parent_tools: ToolRegistry | None
+) -> list[Tool]:
+    """MCP tools from the parent's current registry the subagent allowlisted.
+
+    Resolution is lazy (per delegation) so MCP servers added after startup flow
+    into subagents that explicitly allow them. An empty allowlist means
+    default-deny: no MCP tools ever reach the subagent.
+    """
+    if parent_tools is None or not subagent.mcp_allowlist:
+        return []
+    return [
+        t
+        for t in parent_tools.all()
+        if t.name.startswith("mcp_") and _matches_mcp_allowlist(t.name, subagent.mcp_allowlist)
+    ]
+
+
 def _compose_brief(
     task: str,
     *,
@@ -149,6 +184,7 @@ class SubagentTool(Tool):
         concurrent: bool = False,
         budget: SubagentBudget | None = None,
         nested_delegates: tuple[Tool, ...] = (),
+        parent_tools: ToolRegistry | None = None,
         nested_hint: str = "",
         advanced: bool = False,
     ) -> None:
@@ -195,6 +231,7 @@ class SubagentTool(Tool):
         self._concurrent = concurrent
         self._budget = budget
         self._nested_delegates = nested_delegates
+        self._parent_tools = parent_tools
         self._nested_hint = nested_hint
         self._advanced = advanced
 
@@ -212,9 +249,10 @@ class SubagentTool(Tool):
         )
         if self._advanced and self._budget is not None and self._budget.remaining() <= 0:
             return ToolResult.error("subagent budget exhausted", agent=self.subagent.name)
+        mcp_tools = resolve_mcp_tools(self.subagent, self._parent_tools)
         agent = self.subagent.as_agent(
             model=self._model,
-            extra_tools=self._nested_delegates,
+            extra_tools=tuple(self._nested_delegates) + tuple(mcp_tools),
             extra_instructions=self._nested_hint,
         )
         run_id = uuid.uuid4().hex
@@ -273,6 +311,7 @@ def subagent_as_tool(
     concurrent: bool = False,
     budget: SubagentBudget | None = None,
     nested_delegates: tuple[Tool, ...] = (),
+    parent_tools: ToolRegistry | None = None,
     nested_hint: str = "",
     advanced: bool = False,
 ) -> Tool:
@@ -288,6 +327,7 @@ def subagent_as_tool(
         concurrent=concurrent,
         budget=budget,
         nested_delegates=nested_delegates,
+        parent_tools=parent_tools,
         nested_hint=nested_hint,
         advanced=advanced,
     )
@@ -316,13 +356,16 @@ def add_subagents(
     if not advanced:
         for sa in subagents:
             agent.tools.register(
-                subagent_as_tool(sa, runner, base, on_event=on_event)
+                subagent_as_tool(
+                    sa, runner, base, on_event=on_event, parent_tools=agent.tools
+                )
             )
         return
     level2 = {
         sa.name: subagent_as_tool(
             sa, runner, base,
             on_event=on_event, concurrent=True, budget=budget, advanced=True,
+            parent_tools=agent.tools,
         )
         for sa in subagents
     }
@@ -335,6 +378,7 @@ def add_subagents(
                 concurrent=True,
                 budget=budget,
                 nested_delegates=nested,
+                parent_tools=agent.tools,
                 nested_hint=DELEGATION_HINT,
                 advanced=True,
             )

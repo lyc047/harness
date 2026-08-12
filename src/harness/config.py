@@ -60,6 +60,10 @@ class Settings:
     subagent_advanced: bool = False  # advanced orchestration (nesting + concurrency)
     subagent_budget: int = 40  # per-run subagent turn budget (advanced-mode guardrail)
 
+    # Web search backend for the web_search tool
+    web_search_backend: str = "bing"  # bing (free, cn default) | duckduckgo | tavily-on-key
+    tavily_api_key: str = ""  # optional; its presence switches web_search to Tavily
+
     # Logging / tracing
     log_level: str = "INFO"
     log_file: str = "harness.log"
@@ -79,7 +83,7 @@ class Settings:
         if env_path is not None and Path(env_path).exists():
             load_dotenv(env_path, override=False)
         # Snapshot relevant keys for explicit forwards in from_env.
-        prefixes = ("DEEPSEEK_", "HARNESS_", "SANDBOX_")
+        prefixes = ("DEEPSEEK_", "HARNESS_", "SANDBOX_", "TAVILY_")
         env = {k: v for k, v in os.environ.items() if k.startswith(prefixes)}
         return cls.from_env(env)
 
@@ -131,6 +135,8 @@ class Settings:
             subagent_model=get("HARNESS_SUBAGENT_MODEL"),
             subagent_advanced=get_bool("HARNESS_SUBAGENT_ADVANCED", False),
             subagent_budget=get_int("HARNESS_SUBAGENT_BUDGET", 40),
+            web_search_backend=get("HARNESS_WEB_SEARCH_BACKEND", default="bing"),
+            tavily_api_key=get("TAVILY_API_KEY"),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),
             log_file=get("HARNESS_LOG_FILE", default="harness.log"),
             trace_file=get("HARNESS_TRACE_FILE", default="harness.trace.jsonl"),
