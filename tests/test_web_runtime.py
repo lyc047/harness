@@ -113,14 +113,29 @@ async def test_web_approver_unknown_id_dropped() -> None:
 
 
 async def test_web_approver_single_pending_fallback() -> None:
-    """Compat bridge: an empty/unknown id with exactly one pending approval
-    resolves that pending one (old clients that omit the id keep working in
-    sequential mode)."""
+    """Compat bridge: an empty id with exactly one pending approval resolves
+    that pending one (old clients that omit the id keep working in sequential
+    mode)."""
     outbox: asyncio.Queue[str] = asyncio.Queue()
     approver = WebApprover(outbox)
     task = asyncio.create_task(approver.prompt(_tool_call()))
     await asyncio.sleep(0)
     await approver.approve("", "y")
+    assert await task == "y"
+
+
+async def test_web_approver_stale_nonempty_id_does_not_resolve() -> None:
+    """A stale non-empty id (from a cancelled run) must NOT resolve a later
+    run's sole pending prompt, while the empty-id legacy bridge still does."""
+    outbox: asyncio.Queue[str] = asyncio.Queue()
+    approver = WebApprover(outbox)
+    t2 = ToolCall(id="t2", name="bash", arguments='{"command": "ls"}')
+    task = asyncio.create_task(approver.prompt(t2))
+    await asyncio.sleep(0)
+    await approver.approve("stale-id", "n")  # non-empty, unknown -> discarded
+    assert "t2" in approver._pending
+    assert not approver._pending["t2"].done()
+    await approver.approve("", "y")  # empty-id bridge still resolves sole pending
     assert await task == "y"
 
 

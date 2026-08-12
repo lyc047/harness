@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
 from rich.panel import Panel
 
@@ -51,6 +53,8 @@ async def handle_command(
     runner: Runner,
     permissions: Permissions | None = None,
     skills: SkillRegistry | None = None,
+    concurrent: bool = False,
+    subagent_budget: Any | None = None,
 ) -> bool:
     """Run a slash command. Returns True if the REPL should exit."""
     cmd, _, arg = line.partition(" ")
@@ -124,6 +128,8 @@ async def handle_command(
             agent=agent,
             runner=runner,
             current_session=current_session,
+            concurrent=concurrent,
+            subagent_budget=subagent_budget,
         )
 
     elif cmd == "/permissions":
@@ -281,8 +287,14 @@ async def _resume_command(
     agent: Agent,
     runner: Runner,
     current_session: list[str | None],
+    concurrent: bool = False,
+    subagent_budget: Any | None = None,
 ) -> None:
-    """Handle ``/resume <id>``: continue a paused run from its checkpoint."""
+    """Handle ``/resume <id>``: continue a paused run from its checkpoint.
+
+    A resumed run starts a fresh per-run subagent budget and, when advanced
+    orchestration is active, resumes with concurrent multi-tool execution.
+    """
     checkpoint_id = arg.strip()
     if not checkpoint_id:
         console.print("[yellow]Usage:[/] /resume <checkpoint-id>")
@@ -298,7 +310,11 @@ async def _resume_command(
         f"[cyan]Resuming[/] checkpoint [cyan]{checkpoint_id}[/] "
         f"(turn {state.turns}, session {state.session_id or '-'})…"
     )
-    async for event in runner.resume_streamed(agent, state, session_id=state.session_id):
+    if subagent_budget is not None:
+        subagent_budget.reset()
+    async for event in runner.resume_streamed(
+        agent, state, session_id=state.session_id, concurrent=concurrent
+    ):
         render_stream_event(event, console)
 
 

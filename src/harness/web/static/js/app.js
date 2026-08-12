@@ -90,6 +90,7 @@
     };
     ws.onclose = function () {
       if (state.currentApproval) { els.approvalOverlay.hidden = true; state.currentApproval = null; }
+      approvalQueue = []; // server approval state is per-connection; never surface stale queued approvals
       if (state.phase === 'paused') { els.pauseOverlay.hidden = true; }
       setPhase('connecting');
       if (state.reconnectAttempt < 8) {
@@ -514,7 +515,9 @@
     if (tc) send({ type: 'approval', tool_call_id: tc.id, decision: decision });
     closeApprovalDialog();
     showNextApproval();
-    setPhase('running');
+    // a queued second approval keeps the approval_pending phase (its dialog is
+    // open); only fall back to running when the queue is empty
+    if (!approvalQueue.length) setPhase('running');
   }
 
   function resetApprovals() {

@@ -55,10 +55,11 @@ class WebApprover:
 
     Each pending approval is keyed by its ``tool_call.id`` so concurrent
     approval prompts (advanced mode) are matched to the right decision. An
-    empty/unknown id with exactly one pending resolves that one — the compat
-    bridge for clients that omit the id in sequential mode. Timeout fails
-    closed (``"n"``); ``drain`` cancels pending futures so a cancelled run's
-    leftovers can't satisfy the next prompt.
+    empty id with exactly one pending resolves that one — the compat bridge
+    for legacy clients that omit the id in sequential mode; an unknown
+    non-empty id is discarded. Timeout fails closed (``"n"``); ``drain``
+    cancels pending futures so a cancelled run's leftovers can't satisfy the
+    next prompt.
     """
 
     def __init__(
@@ -93,8 +94,11 @@ class WebApprover:
 
     async def approve(self, tool_call_id: str, decision: str) -> None:
         fut = self._pending.pop(tool_call_id, None)
-        if fut is None and len(self._pending) == 1:
-            (fut,) = list(self._pending.values())  # compat bridge: sole pending
+        # Compat bridge only for id-omitting legacy clients. A stale non-empty
+        # id from a cancelled run must NOT resolve a later run's pending prompt
+        # (spec: unknown id => discard).
+        if fut is None and tool_call_id == "" and len(self._pending) == 1:
+            (fut,) = list(self._pending.values())
         if fut is not None and not fut.done():
             fut.set_result(decision)
 
@@ -545,7 +549,7 @@ class Runtime:
                 stack.agent,
                 content,
                 session_id=self._active_session,
-                concurrent=self._advanced,
+                concurrent=self._advanced and self._settings.subagents,
             ):
                 frame = serialize_event(event)
                 if frame is not None:
@@ -641,7 +645,7 @@ class Runtime:
                 stack.agent,
                 state,
                 session_id=state.session_id or self._active_session,
-                concurrent=self._advanced,
+                concurrent=self._advanced and self._settings.subagents,
             ):
                 frame = serialize_event(event)
                 if frame is not None:

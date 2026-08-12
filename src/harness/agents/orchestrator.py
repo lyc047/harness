@@ -233,10 +233,14 @@ class SubagentTool(Tool):
                     turns = result.turns
         except MaxTurnsExceeded as exc:
             # A delegate burning its turn budget must not crash the parent run;
-            # surface it as a tool error the parent can react to.
+            # surface it as a tool error the parent can react to. Count the
+            # delegate's consumed turns so the shared per-run budget reflects
+            # the work it actually did — over-counting is the conservative
+            # guardrail.
             logger.warning("subagent %r hit %s", self.subagent.name, exc)
             output = str(exc)
             is_error = True
+            turns = max(exc.max_turns, 1)
         except Exception as exc:  # noqa: BLE001 — same: degrade, don't propagate
             logger.warning("subagent %r raised %s: %s", self.subagent.name, type(exc).__name__, exc)
             output = f"{type(exc).__name__}: {exc}"

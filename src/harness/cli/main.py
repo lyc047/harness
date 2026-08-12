@@ -212,7 +212,9 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
             if await handle_command(line, console=console, store=store, agent=agent,
                                     current_session=holder, mcp=mcp, planner=planner,
                                     runner=runner, permissions=permissions,
-                                    skills=skill_registry):
+                                    skills=skill_registry,
+                                    concurrent=settings.subagent_advanced and args.subagents,
+                                    subagent_budget=stack.subagent_budget):
                 break
             session_id = holder[0]
             continue
@@ -223,7 +225,10 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
         stack.subagent_budget.reset()
         try:
             async for event in runner.run_streamed(
-                agent, line, session_id=session_id, concurrent=settings.subagent_advanced
+                agent,
+                line,
+                session_id=session_id,
+                concurrent=settings.subagent_advanced and args.subagents,
             ):
                 render_stream_event(event, console)
         except RunPaused as exc:
