@@ -120,7 +120,9 @@ def resolve_mcp_tools(
     return [
         t
         for t in parent_tools.all()
-        if t.name.startswith("mcp_") and _matches_mcp_allowlist(t.name, subagent.mcp_allowlist)
+        if t.name.startswith("mcp_")
+        and _matches_mcp_allowlist(t.name, subagent.mcp_allowlist)
+        and getattr(t, "server", None) is not None
     ]
 
 

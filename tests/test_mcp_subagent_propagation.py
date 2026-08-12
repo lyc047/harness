@@ -23,19 +23,20 @@ from harness.tools.registry import ToolRegistry
 
 
 class _FakeTool(Tool):
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, server: str | None = None) -> None:
         super().__init__(
             name=name,
             description=f"{name}: fake",
             parameters_schema={"type": "object", "properties": {}},
         )
+        self.server = server
 
     async def invoke(self, **kwargs: Any) -> ToolResult:
         return ToolResult.ok(f"{self.name} ran")
 
 
 def _mcp(server: str, name: str) -> Tool:
-    return _FakeTool(f"mcp_{server}_{name}")
+    return _FakeTool(f"mcp_{server}_{name}", server=server)
 
 
 def _subagent(name: str, mcp_allowlist: tuple[str, ...] = ()) -> Subagent:

@@ -16,7 +16,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from harness.observability.logging import get_logger
+
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; HarnessBot/1.0)"}
+
+logger = get_logger("tools")
 
 
 @dataclass
@@ -118,7 +122,8 @@ def _extract_bing_results(html_text: str) -> list[WebSearchResult]:
     parser = _BingParser()
     try:
         parser.feed(html_text)
-    except Exception:  # noqa: BLE001 — malformed HTML degrades to empty
+    except Exception as exc:  # noqa: BLE001 — malformed HTML degrades to empty
+        logger.warning("web_search Bing parse failed: %s", exc)
         return []
     return parser.results
 
@@ -178,7 +183,8 @@ def _extract_duckduckgo_results(html_text: str) -> list[WebSearchResult]:
     parser = _DuckDuckGoParser()
     try:
         parser.feed(html_text)
-    except Exception:  # noqa: BLE001 — malformed HTML degrades to empty
+    except Exception as exc:  # noqa: BLE001 — malformed HTML degrades to empty
+        logger.warning("web_search DuckDuckGo parse failed: %s", exc)
         return []
     return parser.results
 
@@ -199,7 +205,8 @@ class BingProvider:
         url = f"{self._base_url}?q={urllib.parse.quote(query)}&setlang=zh-hans"
         try:
             html_text = await self._fetch(url)
-        except Exception:  # noqa: BLE001 — network failure degrades to no results
+        except Exception as exc:  # noqa: BLE001 — network failure degrades to no results
+            logger.warning("web_search Bing fetch failed for %s: %s", url, exc)
             return []
         return _extract_bing_results(html_text)[:max_results]
 
@@ -220,7 +227,8 @@ class DuckDuckGoProvider:
         url = f"{self._base_url}?q={urllib.parse.quote(query)}"
         try:
             html_text = await self._fetch(url)
-        except Exception:  # noqa: BLE001 — network failure degrades to no results
+        except Exception as exc:  # noqa: BLE001 — network failure degrades to no results
+            logger.warning("web_search DuckDuckGo fetch failed for %s: %s", url, exc)
             return []
         return _extract_duckduckgo_results(html_text)[:max_results]
 
@@ -233,15 +241,19 @@ class TavilyProvider:
         self._endpoint = endpoint
 
     async def search(self, query: str, max_results: int = 5) -> list[WebSearchResult]:
-        body = json.dumps({"api_key": self._api_key, "query": query, "max_results": max_results})
+        body = json.dumps({"query": query, "max_results": max_results})
         try:
             raw = await _http_post(
                 self._endpoint,
                 body,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
             )
             data = json.loads(raw)
-        except Exception:  # noqa: BLE001 — any failure degrades to no results
+        except Exception as exc:  # noqa: BLE001 — any failure degrades to no results
+            logger.warning("web_search Tavily request failed for %s: %s", self._endpoint, exc)
             return []
         return [
             WebSearchResult(

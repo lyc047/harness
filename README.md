@@ -134,6 +134,10 @@ deliverables saved to a file), which the parent verifies against the brief.
 - **Model tiering**: set `HARNESS_SUBAGENT_MODEL` to give delegates a cheaper
   tier (the provider now honors `agent.model` per request); a subagent's own
   `model:` field wins, unset inherits the parent.
+- **Web access**: subagents whose `tools:` allowlist includes `web_search` can
+  fetch up-to-date external facts. The backend is pluggable —
+  `HARNESS_WEB_SEARCH_BACKEND` picks the free Bing (default) or DuckDuckGo
+  scraper, and setting `TAVILY_API_KEY` switches it to Tavily.
 - **Web run view**: with `serve --subagents`, each delegated run renders as a
   nested card inside the parent bubble — the subagent's own thinking, tool
   calls and results stream into it, and its tool approvals flow through the
