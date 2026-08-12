@@ -20,6 +20,7 @@ src/harness/
 │   ├── run_result.py    # RunResult / RunState / RunPaused
 │   ├── hooks.py         # lifecycle callbacks (observability, rendering)
 │   ├── snapshot.py      # SnapshotExecutor: pre-write file snapshots (rollback)
+│   ├── locking.py       # FileLockExecutor: per-path mutual exclusion (asyncio)
 │   └── compose.py       # build_core_stack(): the one CLI+web composition point
 ├── llm/
 │   ├── base.py          # LLMProvider protocol + StreamEvent types
@@ -38,8 +39,9 @@ src/harness/
 │   ├── subagent.py      # sub-agent config + context isolation
 │   ├── registry.py      # YAML subagent registry (bundled + runtime override)
 │   └── orchestrator.py  # manager pattern: sub-agents exposed as tools;
-│                        #   per-subagent model tiering + run-event sink
-│                        #   (the web renders nested subagent runs)
+│                        #   per-subagent model tiering + run-event sink;
+│                        #   advanced mode: depth-2 nesting, concurrent runs,
+│                        #   per-run turn budget (the web renders nested runs)
 ├── planning/
 │   ├── planner.py       # plan generation from a task
 │   └── executor.py      # step execution + revision (planning_interval)
@@ -75,7 +77,8 @@ src/harness/
 3. **Tool calls** — each `ToolCall` is executed through the **executor chain**:
 
    ```
-   ApprovalExecutor(SandboxedExecutor(SnapshotExecutor(default_executor, sessions), sandbox), permissions)
+   ApprovalExecutor(SandboxedExecutor(FileLockExecutor(SnapshotExecutor(
+       default_executor, sessions)), sandbox), permissions)
    ```
 
    approval first, then sandbox routing for `bash`, then a pre-write
@@ -155,6 +158,12 @@ browser (vanilla JS SPA) ⇄ FastAPI/uvicorn ⇄ per-connection Runtime ⇄ Runn
   `safeUrl` whitelisting http/https) so model/tool text is never injected as
   HTML; tool-call cards keyed by `tool_call.id`; an approval dialog
   (`y`/`n`/`a`/`p`/edit); pause/resume overlay; session sidebar; `/plan` panel.
+- **Advanced orchestration** — a status-bar 高级编排 toggle calls
+  `{type:"set_advanced"}`; `Runtime.set_advanced` unregisters and re-registers
+  the delegate tools (nesting on/off) and swaps the delegation-protocol
+  variant, effective from the next message. Concurrent approvals are matched to
+  their tool call by `tool_call_id`; concurrent file writes are serialized per
+  path by the executor chain.
 
 ## Design principles
 

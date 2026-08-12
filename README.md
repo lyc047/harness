@@ -82,6 +82,10 @@ ASK policy, **自动** auto-approves everything except explicit `deny` rules, an
 **完全放开** allows every call, overriding even `deny` rules (the sandbox
 boundary itself is unchanged).
 
+The **高级编排** toggle in the same status bar switches the connection into
+advanced subagent orchestration (nesting + concurrency) — see *Subagents*
+above. It is per-connection and takes effect from the next message.
+
 REST + WS API (all `json`):
 
 | Method / WS type | Purpose |
@@ -134,6 +138,19 @@ deliverables saved to a file), which the parent verifies against the brief.
   nested card inside the parent bubble — the subagent's own thinking, tool
   calls and results stream into it, and its tool approvals flow through the
   same approval dialog as the parent's.
+- **Advanced orchestration**: turn on the status-bar **高级编排** toggle (web)
+  or set `HARNESS_SUBAGENT_ADVANCED=1` (CLI) for **nested + concurrent
+  delegation** on hard, multi-subtask work. Subagents can hand off to each
+  other one more level (structurally capped at depth 2), and multi-tool turns
+  run in parallel — results stay in call order and a failing tool never aborts
+  its siblings. A per-run **subagent turn budget** (`HARNESS_SUBAGENT_BUDGET`,
+  default 40) guards cost: when it is spent, further delegates return an error
+  the parent adapts to. Concurrent file access is serialized per path
+  (`FileLockExecutor`), so two agents writing the same file never race, and
+  concurrent approvals are matched to the right tool call by `tool_call_id`.
+  `scripts/e2e_subagents_compare.py` runs one auto-checkable task in both modes
+  and prints a rubric + judge comparison — a demonstration that advanced mode
+  tends to produce more complete results on multi-subtask work.
 
 ### Approval & sandbox
 
