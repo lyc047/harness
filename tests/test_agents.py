@@ -219,6 +219,7 @@ def test_example_subagents_include_design_and_writer() -> None:
         "frontend_design": "Frontend Design",
         "doc_writer": "Doc Co-Authoring Workflow",
         "coder": "Coding Discipline",
+        "security_reviewer": "Security Review",
     }.items():
         assert marker in subs[name].instructions, f"{name} missing its skill"
 
@@ -233,6 +234,7 @@ def test_subagent_skill_loads_from_bundled() -> None:
     assert "Frontend Design" in load_subagent_skill("frontend-design")
     assert "Doc Co-Authoring Workflow" in load_subagent_skill("doc-coauthoring")
     assert "Coding Discipline" in load_subagent_skill("coding")
+    assert "Security Review" in load_subagent_skill("security-review")
 
 
 def test_delegation_protocol_attached_to_parent() -> None:
@@ -286,6 +288,27 @@ def test_delegate_tool_descriptions_carry_triggers() -> None:
         assert "by default" in sa.description, (
             f"{sa.name} does not make delegation the default"
         )
+
+
+def test_security_reviewer_is_readonly_and_skilled() -> None:
+    """security_reviewer ships read-only and carries the security-review skill."""
+    from pathlib import Path
+
+    from harness.agents.registry import BUNDLED_SUBAGENTS_DIR, SubagentRegistry
+    from harness.tools.builtin import builtin_registry
+
+    reg = SubagentRegistry(Path(".") / "nope", bundled_dir=BUNDLED_SUBAGENTS_DIR)
+    spec = reg.get("security_reviewer")
+    assert spec is not None
+    assert spec.skill == "security-review"
+    assert "write_file" not in spec.tools and "bash" not in spec.tools
+    sa = reg.to_subagent(spec)
+    assert "Security Review" in sa.instructions
+    # every declared tool name resolves to a builtin (registry tolerates unknowns,
+    # so assert the allowlist actually binds)
+    builtins = builtin_registry()
+    for name in spec.tools:
+        assert builtins.get(name) is not None, f"unknown tool {name!r}"
 
 
 # ---- YAML subagent registry ---- #
