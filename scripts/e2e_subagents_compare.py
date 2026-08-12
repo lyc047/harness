@@ -34,23 +34,36 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+# Six independent modules — a task that pressures a single parent context and
+# naturally decomposes into parallel sub-researches. The rubric generalizes to
+# whatever modules are listed here (max score = 25 * len(MODULES) + 25).
 MODULES = [
     "src/harness/core/runner.py",
     "src/harness/safety/approver.py",
-    "src/harness/agents/registry.py",
+    "src/harness/planning/planner.py",
+    "src/harness/agents/orchestrator.py",
+    "src/harness/web/runtime.py",
+    "src/harness/tools/mcp/client.py",
 ]
+HEADINGS = [f"## {Path(m).stem.capitalize()}" for m in MODULES]
+SOURCES = [Path(m).name for m in MODULES]
 MIN_SECTION_CHARS = 200
 
 
 def _prompt(out: str) -> str:
+    heading_list = ", ".join(f"'{h}'" for h in HEADINGS)
     return (
-        "Research the following three modules and write a markdown report: "
-        f"{', '.join(MODULES)}. The report must: "
-        f"(1) exist at {out}/report.md; "
-        "(2) contain the three headings '## Runner', '## Approver', '## Registry' "
-        "with a section describing each module; "
-        f"(3) each section at least {MIN_SECTION_CHARS} characters; "
-        "(4) end with a '## Sources' section listing the three file paths. "
+        f"Research the following {len(MODULES)} modules and write a markdown "
+        f"report: {', '.join(MODULES)}.\n"
+        f"The report must:\n"
+        f"  (1) exist at {out}/report.md;\n"
+        f"  (2) contain the {len(HEADINGS)} headings {heading_list}, "
+        f"with a section describing each module;\n"
+        f"  (3) each section at least {MIN_SECTION_CHARS} characters;\n"
+        f"  (4) end with a '## Sources' section listing the {len(MODULES)} file paths.\n"
+        "This is a large research task — delegate independent sub-researches to "
+        "the delegate_to_researcher tool, and when several sub-researches are "
+        "independent, issue them in ONE response so they can run in parallel. "
         "Read each file before writing about it."
     )
 
@@ -64,7 +77,7 @@ def _score(out_dir: Path) -> dict[str, int]:
 
     score = 20  # report exists
     sections = 0
-    for heading in ("## Runner", "## Approver", "## Registry"):
+    for heading in HEADINGS:
         if heading in text:
             sections += 1
     score += 15 * sections
@@ -76,17 +89,16 @@ def _score(out_dir: Path) -> dict[str, int]:
     for chunk in body:
         if len(chunk.strip()) >= MIN_SECTION_CHARS:
             length_hits += 1
-    score += 10 * min(length_hits, 3)
+    score += 10 * min(length_hits, len(HEADINGS))
 
-    if all(m in lower for m in ("runner.py", "approver.py", "registry.py")):
+    sources_ok = all(name in lower for name in SOURCES)
+    if sources_ok:
         score += 5
     return {
         "report": 20 if report.exists() else 0,
         "sections": sections,
         "length": length_hits,
-        "sources": 1 if score % 100 >= 0 and all(
-            m in lower for m in ("runner.py", "approver.py", "registry.py")
-        ) else 0,
+        "sources": 1 if sources_ok else 0,
         "total": score,
     }
 
