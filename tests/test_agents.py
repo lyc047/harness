@@ -218,6 +218,7 @@ def test_example_subagents_include_design_and_writer() -> None:
     for name, marker in {
         "frontend_design": "Frontend Design",
         "doc_writer": "Doc Co-Authoring Workflow",
+        "coder": "Coding Discipline",
     }.items():
         assert marker in subs[name].instructions, f"{name} missing its skill"
 
@@ -231,6 +232,7 @@ def test_subagent_skill_loads_from_bundled() -> None:
 
     assert "Frontend Design" in load_subagent_skill("frontend-design")
     assert "Doc Co-Authoring Workflow" in load_subagent_skill("doc-coauthoring")
+    assert "Coding Discipline" in load_subagent_skill("coding")
 
 
 def test_delegation_protocol_attached_to_parent() -> None:

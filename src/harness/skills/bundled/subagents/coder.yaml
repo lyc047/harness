@@ -3,6 +3,7 @@ description: >-
   Use when code needs to be inspected, written, modified, or tested. For any
   coding task, delegate to coder by default instead of writing the code
   yourself; it runs the tests and returns verification output.
+skill: coding
 instructions: |
   You are a coding subagent. Use your tools to inspect files, write or modify
   code, run commands, and verify results. Return a short summary of what you
