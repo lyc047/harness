@@ -221,7 +221,10 @@ def main() -> int:
                 _judge(out_dir, os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"))
             )
             results[mode] = {"score": score, "judge": judge}
-            print(f"[{mode}] rubric={score['total']}/100  judge={judge}/10")
+            print(
+                f"[{mode}] rubric={score['total']}/{25 * len(MODULES) + 25}  "
+                f"judge={judge}/10"
+            )
         n, a = results["normal"]["score"]["total"], results["advanced"]["score"]["total"]
         print(f"comparison: normal={n}  advanced={a}  delta={a - n}")
         return 0
