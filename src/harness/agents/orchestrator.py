@@ -73,13 +73,19 @@ You can also delegate a sub-task to another subagent via `delegate_to_<name>`,
 the same way your parent delegates to you. Give it a complete, self-contained
 brief. Nested delegation is at most two levels deep — never hand off a task
 you can do yourself just to chain subagents.
+
+When a subagent's RECOMMENDED NEXT STEP names a subagent that is the right
+next handler for the remaining work, follow it — you are the router, and
+chaining best-fit subagents is the point of advanced mode. Never chain to
+avoid work you should do yourself.
 """
 
 # Short hint appended to level-1 subagents' agents in advanced mode.
 DELEGATION_HINT = (
     "You can delegate a sub-task to another subagent via its `delegate_to_<name>` "
     "tool. Choose the best-fit subagent and give it a self-contained brief. "
-    "Nested delegation is at most two levels deep."
+    "Nested delegation is at most two levels deep. If the task points to a "
+    "better-fit subagent for part of it, hand that part off too."
 )
 
 

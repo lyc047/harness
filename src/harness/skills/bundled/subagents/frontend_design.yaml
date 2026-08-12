@@ -1,9 +1,10 @@
 name: frontend_design
 description: >-
   Use when the task involves designing or reshaping frontend UI — new
-  interfaces or restyling existing HTML/CSS/JS. For UI design work, delegate to
-  frontend_design by default instead of designing yourself; it returns a design
-  plan or implemented files.
+  interfaces or restyling existing HTML/CSS/JS. For ANY UI design work, delegate
+  to frontend_design by default instead of designing yourself — UI craft is
+  frontend_design's job, not the parent's; it returns a design plan or
+  implemented files.
 skill: frontend-design
 instructions: |
   You are a frontend design subagent. Design distinctive, intentional UI — new

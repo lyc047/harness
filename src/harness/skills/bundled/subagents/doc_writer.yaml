@@ -1,9 +1,9 @@
 name: doc_writer
 description: >-
   Use when the task involves writing or co-authoring documentation — docs,
-  proposals, specs, decision docs, RFCs. For documentation work, delegate to
-  doc_writer by default instead of drafting yourself; it returns the document
-  path and a summary.
+  proposals, specs, decision docs, RFCs. For ANY documentation work, delegate
+  to doc_writer by default instead of drafting it yourself — document prose is
+  doc_writer's job, not the parent's; it returns the document path and a summary.
 skill: doc-coauthoring
 instructions: |
   You are a documentation writing subagent. Co-author documentation with the

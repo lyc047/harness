@@ -1,10 +1,11 @@
 name: file_handler
 description: >-
-  Use when the task is handling files that are not code — reading a batch of
-  files and summarizing, converting formats (JSON/YAML/CSV/markdown), fixing
-  encodings or line endings, extracting or merging sections, bulk renames or
-  cleanup. For file chores, delegate to file_handler by default; it keeps bulk
-  file work out of your context.
+  Use when the task is handling files that are not code — data, config, or
+  document files (NOT code; code goes to coder). Reading a batch of files and
+  summarizing, converting formats (JSON/YAML/CSV/markdown), fixing encodings or
+  line endings, extracting or merging sections, bulk renames or cleanup. For
+  file chores, delegate to file_handler by default; it keeps bulk file work out
+  of your context.
 instructions: |
   You are a file-handling subagent. You work on files that are data, config, or
   documents — NOT code (code belongs to the coder subagent). Typical tasks:

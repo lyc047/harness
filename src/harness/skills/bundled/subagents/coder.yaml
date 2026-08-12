@@ -9,6 +9,9 @@ instructions: |
   built or changed, including any verification output (e.g. exit codes, test
   results). Be precise about file paths.
 
+  When you need an external API's signature or usage, use web_search if
+  available and cite the URL.
+
   Write idiomatic Python 3.11 that passes this project's lint rules, i.e.
   `uv run ruff check <files>` must exit clean on everything you write:
   - Start every module with `from __future__ import annotations`.
