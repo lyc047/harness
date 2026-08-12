@@ -1,7 +1,5 @@
 """Runner turn-loop behaviour with a scripted fake provider."""
 
-import asyncio
-
 import pytest
 
 from harness.core.agent import Agent

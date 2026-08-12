@@ -206,7 +206,7 @@ class Runner:
                         await self._hooks.emit(self._hooks.on_tool_call, tool_call, agent)
                         results.append(await self._tool_executor(agent, tool_call))
 
-                for tool_call, tool_result in zip(response.tool_calls, results):
+                for tool_call, tool_result in zip(response.tool_calls, results, strict=True):
                     await self._hooks.emit(
                         self._hooks.on_tool_result, tool_call, tool_result, agent
                     )
