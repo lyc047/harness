@@ -44,3 +44,20 @@ def test_replace_returns_new_instance():
     assert s2.model == "other-model"
     assert s.model == "deepseek-v4-flash"
     assert s2 is not s
+
+
+def test_subagent_advanced_and_budget_env():
+    s = Settings.from_env(
+        {"HARNESS_SUBAGENT_ADVANCED": "1", "HARNESS_SUBAGENT_BUDGET": "12"}
+    )
+    assert s.subagent_advanced is True
+    assert s.subagent_budget == 12
+
+    d = Settings.from_env({})
+    assert d.subagent_advanced is False
+    assert d.subagent_budget == 40  # safe default
+
+
+def test_subagent_budget_bad_value_falls_back():
+    s = Settings.from_env({"HARNESS_SUBAGENT_BUDGET": "abc"})
+    assert s.subagent_budget == 40

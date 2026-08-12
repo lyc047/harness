@@ -57,6 +57,8 @@ class Settings:
     # Multi-agent orchestration: register researcher/coder delegate tools
     subagents: bool = False
     subagent_model: str = ""  # cheaper model for subagents; empty => inherit parent
+    subagent_advanced: bool = False  # advanced orchestration (nesting + concurrency)
+    subagent_budget: int = 40  # per-run subagent turn budget (advanced-mode guardrail)
 
     # Logging / tracing
     log_level: str = "INFO"
@@ -127,6 +129,8 @@ class Settings:
             permissions_file=get("HARNESS_PERMISSIONS_FILE", default="permissions.toml"),
             subagents=get_bool("HARNESS_SUBAGENTS", False),
             subagent_model=get("HARNESS_SUBAGENT_MODEL"),
+            subagent_advanced=get_bool("HARNESS_SUBAGENT_ADVANCED", False),
+            subagent_budget=get_int("HARNESS_SUBAGENT_BUDGET", 40),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),
             log_file=get("HARNESS_LOG_FILE", default="harness.log"),
             trace_file=get("HARNESS_TRACE_FILE", default="harness.trace.jsonl"),
