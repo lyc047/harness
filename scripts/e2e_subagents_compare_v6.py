@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from collections import deque
 from pathlib import Path
 from typing import Any, cast
@@ -177,11 +178,13 @@ def _write_coordinator() -> None:
 
 
 def _prompt(out: str) -> str:
-    return "Perform the following task.\n\n" + SPRINT_TASK.format(out=out)
+    # NOTE: SPRINT_TASK contains literal JSON braces ({"duration_s": ...}) so
+    # str.format() would try to parse them as replacement fields — use replace.
+    return "Perform the following task.\n\n" + SPRINT_TASK.replace("{out}", out)
 
 
 def _prompt_forced(out: str) -> str:
-    return "Perform the following task.\n\n" + SPRINT_TASK_FORCED.format(out=out)
+    return "Perform the following task.\n\n" + SPRINT_TASK_FORCED.replace("{out}", out)
 
 
 def _run_verify(out_dir: Path) -> int:
@@ -461,6 +464,7 @@ def main() -> int:
             )
         return 0
     except Exception as exc:  # noqa: BLE001
+        traceback.print_exc(file=sys.stderr)
         print(f"POMO BENCH FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
         print("--- last server log lines ---", file=sys.stderr)
         for line in server_log:
