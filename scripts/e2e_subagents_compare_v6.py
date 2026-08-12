@@ -38,6 +38,11 @@ from e2e_subagents_compare_v2 import (
 )
 
 RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
+# Single-agent (normal) runs of the full 10-file task routinely take 15-25 min
+# with a slow model; the delegated smoke run finished in ~8 min because the
+# subagents worked in parallel. 1800s gives single-agent runs room to finish,
+# and the salvage path below still records verify/pytest if one overruns.
+RUN_TIMEOUT = float(os.environ.get("HARNESS_COMPARE_TIMEOUT", "1800"))
 DELEGATE_PREFIX = "delegate_to_"
 COORDINATOR_NAME = "coordinator"
 VERIFY_TEMPLATE = REPO_ROOT / "scripts" / "pomodoro_verify_template.py"
@@ -407,11 +412,47 @@ def main() -> int:
                     metrics = asyncio.run(
                         asyncio.wait_for(
                             _run_mode(port, str(out_dir), prompt=prompt, advanced=advanced),
-                            timeout=900.0,
+                            timeout=RUN_TIMEOUT,
                         )
                     )
                 except TimeoutError:
-                    print(f"  {label}-{i}: TIMEOUT after 900s — skipped", flush=True)
+                    # Salvage whatever the agent produced before we disconnected —
+                    # the WS stats are lost but verify/pytest still count.
+                    print(
+                        f"  {label}-{i}: TIMEOUT after {RUN_TIMEOUT:.0f}s — salvaging",
+                        flush=True,
+                    )
+                    verify_pass = _run_verify(out_dir)
+                    pytest_passed = _run_pytest(out_dir)
+                    runs.append(
+                        {
+                            "mode": label,
+                            "out": str(out_dir),
+                            "metrics": {
+                                "seconds": RUN_TIMEOUT,
+                                "delegations": 0,
+                                "waves": 0,
+                                "max_concurrency": 0,
+                                "depth": 0,
+                                "types": 0,
+                                "sub_turns": 0,
+                                "web_searches": 0,
+                                "greps": 0,
+                                "writes": 0,
+                                "bash": 0,
+                                "chain": [],
+                                "verify_pass": verify_pass,
+                                "pytest_passed": pytest_passed,
+                            },
+                            "run": i,
+                            "timed_out": True,
+                        }
+                    )
+                    print(
+                        f"  salvaged {label}-{i}: verify={verify_pass}/5 "
+                        f"pytest={pytest_passed}",
+                        flush=True,
+                    )
                     continue
                 runs.append({"mode": label, "out": str(out_dir), "metrics": metrics, "run": i})
                 chains = [" -> ".join(c) for c in cast(list[list[str]], metrics["chain"])]
