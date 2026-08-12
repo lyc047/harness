@@ -204,7 +204,10 @@ async def _dispatch(websocket: WebSocket, rt: Runtime, msg: dict[str, Any]) -> N
         if goal.strip():
             rt.start_plan(goal)
     elif mtype == "approval":
-        rt.decisions.put_nowait(str(msg.get("decision", "n")))
+        await rt.approve(
+            str(msg.get("tool_call_id", "")),
+            str(msg.get("decision", "n")),
+        )
     elif mtype == "pause":
         rt.request_pause()
     elif mtype == "resume":

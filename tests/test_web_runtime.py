@@ -75,62 +75,69 @@ def _tool_call() -> ToolCall:
 
 async def test_web_approver_returns_allow_once() -> None:
     outbox: asyncio.Queue[str] = asyncio.Queue()
-    decisions: asyncio.Queue[str] = asyncio.Queue()
-    approver = WebApprover(outbox, decisions)
+    approver = WebApprover(outbox)
     task = asyncio.create_task(approver.prompt(_tool_call()))
     await asyncio.sleep(0)
-    decisions.put_nowait("y")
+    await approver.approve("t1", "y")
     assert await task == "y"
     frame = json.loads(outbox.get_nowait())
     assert frame["type"] == "approval_required"
     assert frame["tool_call"]["name"] == "bash"
 
 
-async def test_web_approver_deny() -> None:
-    outbox, decisions = asyncio.Queue(), asyncio.Queue()
-    approver = WebApprover(outbox, decisions)
-    task = asyncio.create_task(approver.prompt(_tool_call()))
+async def test_web_approver_correlates_by_tool_call_id() -> None:
+    outbox: asyncio.Queue[str] = asyncio.Queue()
+    approver = WebApprover(outbox)
+    t1 = _tool_call()
+    t2 = ToolCall(id="t2", name="bash", arguments='{"command": "ls"}')
+    task1 = asyncio.create_task(approver.prompt(t1))
+    task2 = asyncio.create_task(approver.prompt(t2))
     await asyncio.sleep(0)
-    decisions.put_nowait("n")
-    assert await task == "n"
+    await approver.approve("t2", "n")
+    await approver.approve("t1", "y")
+    assert await task2 == "n"
+    assert await task1 == "y"  # each decision matched its own call
 
 
-async def test_web_approver_edit_args_passthrough() -> None:
-    outbox, decisions = asyncio.Queue(), asyncio.Queue()
-    approver = WebApprover(outbox, decisions)
+async def test_web_approver_unknown_id_dropped() -> None:
+    outbox: asyncio.Queue[str] = asyncio.Queue()
+    approver = WebApprover(outbox, timeout=0.05)
+    t1 = _tool_call()
+    t2 = ToolCall(id="t2", name="bash", arguments='{"command": "ls"}')
+    task1 = asyncio.create_task(approver.prompt(t1))
+    task2 = asyncio.create_task(approver.prompt(t2))
+    await asyncio.sleep(0)
+    await approver.approve("nope", "y")  # matches nothing -> dropped
+    assert await task1 == "n"  # both time out fail-closed
+    assert await task2 == "n"
+
+
+async def test_web_approver_single_pending_fallback() -> None:
+    """Compat bridge: an empty/unknown id with exactly one pending approval
+    resolves that pending one (old clients that omit the id keep working in
+    sequential mode)."""
+    outbox: asyncio.Queue[str] = asyncio.Queue()
+    approver = WebApprover(outbox)
     task = asyncio.create_task(approver.prompt(_tool_call()))
     await asyncio.sleep(0)
-    edited = 'e:{"command": "pwd"}'
-    decisions.put_nowait(edited)
-    assert await task == edited
+    await approver.approve("", "y")
+    assert await task == "y"
 
 
 async def test_web_approver_timeout_fails_closed() -> None:
-    outbox, decisions = asyncio.Queue(), asyncio.Queue()
-    approver = WebApprover(outbox, decisions, timeout=0.05)
+    outbox: asyncio.Queue[str] = asyncio.Queue()
+    approver = WebApprover(outbox, timeout=0.05)
     assert await approver.prompt(_tool_call()) == "n"
 
 
-async def test_web_approver_cancel_unblocks() -> None:
-    outbox, decisions = asyncio.Queue(), asyncio.Queue()
-    approver = WebApprover(outbox, decisions)
+async def test_web_approver_drain_cancels_pending() -> None:
+    outbox: asyncio.Queue[str] = asyncio.Queue()
+    approver = WebApprover(outbox)
     task = asyncio.create_task(approver.prompt(_tool_call()))
     await asyncio.sleep(0)
-    task.cancel()
+    approver.drain()
     with pytest.raises(asyncio.CancelledError):
         await task
-
-
-async def test_web_approver_drains_stale_decisions() -> None:
-    outbox, decisions = asyncio.Queue(), asyncio.Queue()
-    approver = WebApprover(outbox, decisions)
-    decisions.put_nowait("y")  # stale leftover from a cancelled run
-    approver.drain()
-    assert decisions.empty()
-    task = asyncio.create_task(approver.prompt(_tool_call()))
-    await asyncio.sleep(0)
-    decisions.put_nowait("n")
-    assert await task == "n"
 
 
 # ---- Runtime: streaming runs ---- #
@@ -223,7 +230,7 @@ async def test_runtime_approval_deny_blocks_tool(make_provider, tmp_path) -> Non
     rt, store = await _make_runtime(tmp_path, make_provider, script, tool_executor=executor)
     rt.start_run("write a file")
     await _collect_frames(rt, until="approval_required")
-    rt.decisions.put_nowait("n")
+    await rt.approve("", "n")
     frames = await _collect_frames(rt, until="run_done")
     denied = next(f for f in frames if f["type"] == "tool_result")
     assert denied["is_error"] is True
@@ -249,7 +256,7 @@ async def test_runtime_pause_then_resume(make_provider, tmp_path) -> None:
     await rt.start()
     rt.start_run("go")
     await _collect_frames(rt, until="approval_required")
-    rt.decisions.put_nowait("p")  # allow + pause after this turn
+    await rt.approve("", "p")  # allow + pause after this turn
     paused_frames = await _collect_frames(rt, until="paused")
     paused = paused_frames[-1]
     assert paused["checkpoint_id"]
@@ -388,7 +395,7 @@ async def _auto_approve(rt: Runtime, *, until: str, timeout: float = 5.0) -> lis
         frame = json.loads(raw)
         frames.append(frame)
         if frame["type"] == "approval_required":
-            rt.decisions.put_nowait("y")
+            await rt.approve("", "y")
         if frame["type"] == until:
             return frames
 
@@ -584,7 +591,8 @@ async def test_runtime_subagent_runs_on_cheaper_model(make_provider, tmp_path) -
     )
     provider = rt.stack.provider
     rt.start_run("research something")
-    rt.decisions.put_nowait("y")  # approve the hand-off
+    await _collect_frames(rt, until="approval_required")  # wait for the hand-off prompt
+    await rt.approve("", "y")  # approve the hand-off
     await _collect_frames(rt, until="run_done")
     # parent T1 -> subagent turn -> parent T2
     assert provider.models == ["deepseek-v4-flash", "cheap-model", "deepseek-v4-flash"]
@@ -613,11 +621,11 @@ async def test_runtime_subagent_tool_runs_isolated_session(
         tmp_path, make_provider, script, HARNESS_SUBAGENTS="1"
     )
     rt.start_run("research something")
-    # delegate_to_researcher is ASK policy — approve the hand-off.
-    rt.decisions.put_nowait("y")
+    # delegate_to_researcher is ASK policy — wait for, then approve, the hand-off.
+    await _collect_frames(rt, until="approval_required")
+    await rt.approve("", "y")
     frames = await _collect_frames(rt, until="run_done")
-    types = [f["type"] for f in frames]
-    assert "approval_required" in types
+    tool_results = [f for f in frames if f["type"] == "tool_result"]
     tool_results = [f for f in frames if f["type"] == "tool_result"]
     assert tool_results, "expected a delegate tool_result frame"
     assert "subagent answer" in tool_results[0]["content"]
@@ -664,7 +672,8 @@ async def test_runtime_subagent_events_forwarded(make_provider, tmp_path) -> Non
         tmp_path, make_provider, script, HARNESS_SUBAGENTS="1"
     )
     rt.start_run("research something")
-    rt.decisions.put_nowait("y")  # approve the hand-off only
+    await _collect_frames(rt, until="approval_required")  # wait for the hand-off prompt
+    await rt.approve("", "y")  # approve the hand-off only
     frames = await _collect_frames(rt, until="run_done")
     types = [f["type"] for f in frames]
     assert "subagent_start" in types

@@ -53,23 +53,23 @@ def _restore_file(snapshot: dict[str, Any]) -> None:
 class WebApprover:
     """Approval prompt that pushes a request to the outbox and awaits a decision.
 
-    ``prompt`` runs inside the run task (called by ``ApprovalExecutor``). It
-    emits an ``approval_required`` frame to the outbox, then blocks on the
-    ``decisions`` queue until the WS receive loop puts the user's choice there.
-    A timeout fails closed (``"n"``); a cancelled run propagates
-    ``CancelledError`` so the run task can shut down cleanly.
+    Each pending approval is keyed by its ``tool_call.id`` so concurrent
+    approval prompts (advanced mode) are matched to the right decision. An
+    empty/unknown id with exactly one pending resolves that one — the compat
+    bridge for clients that omit the id in sequential mode. Timeout fails
+    closed (``"n"``); ``drain`` cancels pending futures so a cancelled run's
+    leftovers can't satisfy the next prompt.
     """
 
     def __init__(
         self,
         outbox: asyncio.Queue[str],
-        decisions: asyncio.Queue[str],
         *,
         timeout: float = APPROVAL_TIMEOUT,
     ) -> None:
         self._outbox = outbox
-        self._decisions = decisions
         self._timeout = timeout
+        self._pending: dict[str, asyncio.Future[str]] = {}
 
     async def prompt(self, tool_call: ToolCall) -> str:
         payload = {
@@ -80,21 +80,30 @@ class WebApprover:
                 "arguments": tool_call.arguments,
             },
         }
+        fut = asyncio.get_running_loop().create_future()
+        self._pending[tool_call.id] = fut
         await self._outbox.put(json.dumps(payload, ensure_ascii=False))
         try:
-            return await asyncio.wait_for(self._decisions.get(), timeout=self._timeout)
+            return await asyncio.wait_for(fut, timeout=self._timeout)
         except TimeoutError:
             logger.warning("approval for %r timed out; fail closed", tool_call.name)
             return "n"
+        finally:
+            self._pending.pop(tool_call.id, None)
+
+    async def approve(self, tool_call_id: str, decision: str) -> None:
+        fut = self._pending.pop(tool_call_id, None)
+        if fut is None and len(self._pending) == 1:
+            (fut,) = list(self._pending.values())  # compat bridge: sole pending
+        if fut is not None and not fut.done():
+            fut.set_result(decision)
 
     def drain(self) -> None:
-        """Discard stale decisions so a cancelled run's leftovers can't satisfy
-        the next prompt."""
-        while True:
-            try:
-                self._decisions.get_nowait()
-            except asyncio.QueueEmpty:
-                return
+        """Cancel every pending approval so stale decisions can't survive a run."""
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.cancel()
+        self._pending.clear()
 
 
 class Runtime:
@@ -113,8 +122,7 @@ class Runtime:
         self._settings = settings
         self._store = store
         self.outbox: asyncio.Queue[str] = asyncio.Queue()
-        self.decisions: asyncio.Queue[str] = asyncio.Queue()
-        self._approver = WebApprover(self.outbox, self.decisions, timeout=approval_timeout)
+        self._approver = WebApprover(self.outbox, timeout=approval_timeout)
         self._provider = provider
         self._tool_executor = tool_executor
         self._active_session = active_session
@@ -253,6 +261,10 @@ class Runtime:
         return True
 
     # -- public controls -- #
+
+    async def approve(self, tool_call_id: str, decision: str) -> None:
+        """Route one WS approval decision to the matching pending prompt."""
+        await self._approver.approve(tool_call_id, decision)
 
     def start_run(self, content: str) -> None:
         """Cancel any active run and start a new one with the given message."""

@@ -267,7 +267,7 @@ def test_ws_tool_flow_with_approval_allow(tmp_path, make_provider) -> None:
             approval = frames[-1]
             assert approval["tool_call"]["name"] == "write_file"
 
-            ws.send_json({"type": "approval", "decision": "y"})
+            ws.send_json({"type": "approval", "tool_call_id": "t1", "decision": "y"})
             frames = _recv_until(ws, "run_done")
             types = [f["type"] for f in frames]
             assert "tool_result" in types
@@ -295,7 +295,7 @@ def test_ws_approval_deny_blocks_tool(tmp_path, make_provider) -> None:
             ws.receive_json()  # ready
             ws.send_json({"type": "message", "content": "write a file"})
             _recv_until(ws, "approval_required")
-            ws.send_json({"type": "approval", "decision": "n"})
+            ws.send_json({"type": "approval", "tool_call_id": "t1", "decision": "n"})
             frames = _recv_until(ws, "run_done")
             result = next(f for f in frames if f["type"] == "tool_result")
             assert result["is_error"] is True
@@ -325,7 +325,11 @@ def test_ws_approval_edit_args(tmp_path, make_provider) -> None:
             ws.send_json({"type": "message", "content": "write a file"})
             _recv_until(ws, "approval_required")
             ws.send_json(
-                {"type": "approval", "decision": 'e:{"path": "edited.py", "content": "x"}'}
+                {
+                    "type": "approval",
+                    "tool_call_id": "t1",
+                    "decision": 'e:{"path": "edited.py", "content": "x"}',
+                }
             )
             frames = _recv_until(ws, "run_done")
             result = next(f for f in frames if f["type"] == "tool_result")
@@ -351,7 +355,9 @@ def test_ws_pause_then_resume(tmp_path, make_provider) -> None:
             ready = ws.receive_json()
             ws.send_json({"type": "message", "content": "go"})
             _recv_until(ws, "approval_required")
-            ws.send_json({"type": "approval", "decision": "p"})  # allow + pause
+            ws.send_json(
+                {"type": "approval", "tool_call_id": "t1", "decision": "p"}
+            )  # allow + pause
             paused = _recv_until(ws, "paused")[-1]
             assert paused["checkpoint_id"]
             assert paused["session_id"] == ready["session_id"]
@@ -483,7 +489,7 @@ def test_ws_rollback_and_branch_roundtrip(tmp_path, make_provider) -> None:
                 frame = ws.receive_json()
                 frames.append(frame)
                 if frame.get("type") == "approval_required":
-                    ws.send_json({"type": "approval", "decision": "y"})
+                    ws.send_json({"type": "approval", "tool_call_id": "w1", "decision": "y"})
                 if frame.get("type") == "run_done":
                     break
             assert any(f["type"] == "session_renamed" for f in frames)

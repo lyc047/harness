@@ -49,6 +49,7 @@
 
   let toolCards = {};         // tool_call.id -> { el, output, status }
   let subagentStack = [];     // open nested subagent runs, innermost last
+  let approvalQueue = [];     // pending approval prompts (FIFO), each its own tool_call
   let rafPending = false;
 
   // ---------------------------------------------------------------- phase
@@ -502,12 +503,23 @@
     }
   }
 
+  function showNextApproval() {
+    if (!approvalQueue.length) return;
+    openApprovalDialog(approvalQueue[0]);
+  }
+
   function submitDecision(decision) {
-    const cardId = state.currentApproval ? state.currentApproval.toolCallId : null;
-    send({ type: 'approval', decision: decision });
+    const tc = approvalQueue.shift();
+    if (tc) send({ type: 'approval', tool_call_id: tc.id, decision: decision });
     closeApprovalDialog();
-    if (cardId) markRunning(cardId);
+    showNextApproval();
     setPhase('running');
+  }
+
+  function resetApprovals() {
+    approvalQueue = [];
+    els.approvalOverlay.hidden = true;
+    state.currentApproval = null;
   }
 
   // ---------------------------------------------------------------- pause overlay
@@ -678,6 +690,8 @@
     els.transcript.innerHTML = '';
     toolCards = {};
     subagentStack = [];
+    approvalQueue = [];
+    els.approvalOverlay.hidden = true;
     state.currentAssistant = null;
     state.lastAssistantEl = null;
     state.steps = [];
@@ -851,23 +865,24 @@
         endSubagentRun(msg);
         break;
       case 'approval_required':
-        openApprovalDialog(msg.tool_call);
+        approvalQueue.push(msg.tool_call);
+        showNextApproval();
         break;
       case 'run_done':
         finishAssistantMessage(msg.result && msg.result.final_output);
-        closeApprovalDialog();
+        resetApprovals();
         refreshSessions();
         setPhase('idle');
         break;
       case 'run_error':
         appendSystemBubble('⚠️ ' + (msg.message || 'run failed'));
         finishAssistantMessage();
-        closeApprovalDialog();
+        resetApprovals();
         setPhase('idle');
         break;
       case 'run_cancelled':
         finishAssistantMessage();
-        closeApprovalDialog();
+        resetApprovals();
         setPhase('idle');
         break;
       case 'paused':
@@ -921,7 +936,7 @@
       case 'plan_done':
         renderPlan(msg.plan);
         finishAssistantMessage();
-        closeApprovalDialog();
+        resetApprovals();
         setPhase('idle');
         break;
       case 'fatal':
