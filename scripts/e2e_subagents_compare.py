@@ -111,7 +111,8 @@ async def _judge(out_dir: Path, model: str) -> int:
             ]
         )
         m = re.search(r"\b(?:10|[0-9])\b", resp.final_text or "")
-        return int(m.group(1)) if m else 0
+        # The alternation is a NON-capturing group, so the full match is group(0).
+        return int(m.group(0)) if m else 0
     except Exception:  # noqa: BLE001 — the judge is optional, never fatal
         return -1
 
