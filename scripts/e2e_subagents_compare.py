@@ -149,7 +149,12 @@ def _wait_health(port: int, timeout: float = 30.0) -> None:
     raise RuntimeError("web server did not become healthy in time")
 
 
-async def _run_mode(port: int, out: str, advanced: bool) -> None:
+async def _run_mode(port: int, out: str, advanced: bool) -> tuple[float, int]:
+    """Run one mode against the real model.
+
+    Returns (wall_clock_seconds, delegation_count) — the latter counts
+    ``subagent_start`` frames, one per delegated run including depth-2 nests.
+    """
     import websockets
 
     async with websockets.connect(
@@ -164,10 +169,14 @@ async def _run_mode(port: int, out: str, advanced: bool) -> None:
             await ws.send(json.dumps({"type": "set_advanced", "advanced": True}))
             assert json.loads(await ws.recv())["type"] == "advanced_changed"
         await ws.send(json.dumps({"type": "message", "content": _prompt(out)}))
+        started = time.monotonic()
+        delegations = 0
         while True:
             frame = json.loads(await ws.recv())
             t = frame["type"]
-            if t == "approval_required":
+            if t == "subagent_start":
+                delegations += 1
+            elif t == "approval_required":
                 await ws.send(
                     json.dumps(
                         {
@@ -178,7 +187,7 @@ async def _run_mode(port: int, out: str, advanced: bool) -> None:
                     )
                 )
             elif t == "run_done":
-                return
+                return time.monotonic() - started, delegations
             elif t == "run_error":
                 raise AssertionError(f"run_error: {frame}")
 
@@ -212,21 +221,36 @@ def main() -> int:
     results: dict[str, dict] = {}
     try:
         _wait_health(port)
-        asyncio.run(asyncio.wait_for(_run_mode(port, str(tmp / "normal"), False), timeout=300.0))
-        asyncio.run(asyncio.wait_for(_run_mode(port, str(tmp / "advanced"), True), timeout=300.0))
-        for mode in ("normal", "advanced"):
+        for mode, advanced in (("normal", False), ("advanced", True)):
             out_dir = tmp / mode
+            elapsed, delegations = asyncio.run(
+                asyncio.wait_for(_run_mode(port, str(out_dir), advanced), timeout=300.0)
+            )
             score = _score(out_dir)
             judge = asyncio.run(
                 _judge(out_dir, os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"))
             )
-            results[mode] = {"score": score, "judge": judge}
+            results[mode] = {
+                "score": score,
+                "judge": judge,
+                "seconds": elapsed,
+                "delegations": delegations,
+            }
             print(
                 f"[{mode}] rubric={score['total']}/{25 * len(MODULES) + 25}  "
-                f"judge={judge}/10"
+                f"judge={judge}/10  wall={elapsed:.1f}s  delegations={delegations}"
             )
         n, a = results["normal"]["score"]["total"], results["advanced"]["score"]["total"]
-        print(f"comparison: normal={n}  advanced={a}  delta={a - n}")
+        nt, at = results["normal"]["seconds"], results["advanced"]["seconds"]
+        nd, ad = results["normal"]["delegations"], results["advanced"]["delegations"]
+        print(f"comparison: rubric normal={n} advanced={a} delta={a - n}")
+        print(
+            f"            wall    normal={nt:.1f}s advanced={at:.1f}s "
+            f"delta={at - nt:+.1f}s"
+        )
+        print(
+            f"            deleg.  normal={nd} advanced={ad} delta={ad - nd:+d}"
+        )
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"E2E SUBAGENTS COMPARE FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
