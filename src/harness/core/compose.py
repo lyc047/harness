@@ -15,6 +15,7 @@ from pathlib import Path
 from harness.config import Settings
 from harness.core.agent import Agent
 from harness.core.hooks import Hooks
+from harness.core.locking import FileLockExecutor
 from harness.core.runner import PauseCheck, Runner, ToolExecutor, default_executor
 from harness.core.snapshot import SnapshotExecutor
 from harness.llm.base import LLMProvider
@@ -153,6 +154,7 @@ async def build_core_stack(
     # inside the sandbox (bash never reaches it) but outside default_executor.
     base_executor = tool_executor or default_executor
     base_executor = SnapshotExecutor(base_executor, store.sessions)
+    base_executor = FileLockExecutor(base_executor)  # per-path mutual exclusion
     sandboxed = SandboxedExecutor(base_executor, sandbox)
 
     # Human-in-the-loop: ASK-decided tools consult the injected prompt; "p"
