@@ -11,6 +11,7 @@ that the CLI renders and other modules hook into.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
@@ -102,9 +103,15 @@ class Runner:
         user_input: str,
         *,
         session_id: str | None = None,
+        concurrent: bool = False,
     ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
-        """Stream events of a full run; a final :class:`RunDone` ends the stream."""
-        return self._run_streamed(agent, user_input, session_id=session_id)
+        """Stream events of a full run; a final :class:`RunDone` ends the stream.
+
+        ``concurrent`` runs the tool calls of each multi-call turn in parallel
+        (results preserved in call order; a failing call becomes an error
+        result and does not abort its siblings). Default False = sequential.
+        """
+        return self._run_streamed(agent, user_input, session_id=session_id, concurrent=concurrent)
 
     def resume_streamed(
         self,
@@ -112,6 +119,7 @@ class Runner:
         state: RunState,
         *,
         session_id: str | None = None,
+        concurrent: bool = False,
     ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
         """Continue a paused run from its :class:`RunState` checkpoint."""
         return self._run_streamed(
@@ -119,6 +127,7 @@ class Runner:
             None,
             session_id=session_id or state.session_id,
             resume_state=state,
+            concurrent=concurrent,
         )
 
     # -- implementation -- #
@@ -130,6 +139,7 @@ class Runner:
         *,
         session_id: str | None,
         resume_state: RunState | None = None,
+        concurrent: bool = False,
     ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
         await self._hooks.emit(self._hooks.on_run_start, agent)
         if resume_state is not None:
@@ -175,9 +185,28 @@ class Runner:
                 messages.append(assistant_msg)
 
                 tool_messages: list[Message] = []
-                for tool_call in response.tool_calls:
-                    await self._hooks.emit(self._hooks.on_tool_call, tool_call, agent)
-                    tool_result = await self._tool_executor(agent, tool_call)
+                if concurrent:
+                    # Parallel: fire every on_tool_call first, gather results
+                    # (a failing tool must not abort its siblings), then emit
+                    # results back in call order so the model sees stable order.
+                    for tool_call in response.tool_calls:
+                        await self._hooks.emit(self._hooks.on_tool_call, tool_call, agent)
+                    gathered = await asyncio.gather(
+                        *(self._tool_executor(agent, tc) for tc in response.tool_calls),
+                        return_exceptions=True,
+                    )
+                    results = [
+                        res if isinstance(res, ToolResult)
+                        else ToolResult.error(f"{type(res).__name__}: {res}")
+                        for res in gathered
+                    ]
+                else:
+                    results = []
+                    for tool_call in response.tool_calls:
+                        await self._hooks.emit(self._hooks.on_tool_call, tool_call, agent)
+                        results.append(await self._tool_executor(agent, tool_call))
+
+                for tool_call, tool_result in zip(response.tool_calls, results):
                     await self._hooks.emit(
                         self._hooks.on_tool_result, tool_call, tool_result, agent
                     )

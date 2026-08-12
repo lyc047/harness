@@ -1,5 +1,7 @@
 """Runner turn-loop behaviour with a scripted fake provider."""
 
+import asyncio
+
 import pytest
 
 from harness.core.agent import Agent
@@ -7,7 +9,7 @@ from harness.core.messages import ToolCall
 from harness.core.run_result import MaxTurnsExceeded, RunResult
 from harness.core.runner import RunDone, Runner, ToolResultEvent
 from harness.llm.base import LLMResponse
-from harness.tools.base import tool
+from harness.tools.base import ToolResult, tool
 
 
 @tool
@@ -139,3 +141,53 @@ async def test_resume_adds_system_only_once(tmp_path, make_provider):
     assert [m.role for m in loaded].count("system") == 1
     assert [m.content for m in loaded].count("q1") == 1
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_tool_calls_preserve_order(make_provider):
+    script = [
+        LLMResponse(
+            tool_calls=[
+                ToolCall(id="c1", name="add", arguments='{"a": 1, "b": 1}'),
+                ToolCall(id="c2", name="add", arguments='{"a": 2, "b": 2}'),
+                ToolCall(id="c3", name="add", arguments='{"a": 3, "b": 3}'),
+            ]
+        ),
+        LLMResponse(final_text="done"),
+    ]
+    runner = Runner(make_provider(script=script))
+    agent = Agent(name="test", instructions="sys", tools=_registry(), max_turns=5)
+    results: list[ToolResult] = []
+    async for event in runner.run_streamed(agent, "sum them", concurrent=True):
+        if isinstance(event, ToolResultEvent):
+            results.append(event.result)
+    assert [r.content for r in results] == ["2", "4", "6"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_one_failure_keeps_others(make_provider):
+    from harness.core.runner import default_executor
+
+    async def flaky(agent, tool_call):
+        if tool_call.id == "c2":
+            raise RuntimeError("boom")
+        return await default_executor(agent, tool_call)
+
+    script = [
+        LLMResponse(
+            tool_calls=[
+                ToolCall(id="c1", name="add", arguments='{"a": 1, "b": 1}'),
+                ToolCall(id="c2", name="add", arguments='{"a": 9, "b": 9}'),
+                ToolCall(id="c3", name="add", arguments='{"a": 3, "b": 3}'),
+            ]
+        ),
+        LLMResponse(final_text="done"),
+    ]
+    runner = Runner(make_provider(script=script), tool_executor=flaky)
+    agent = Agent(name="test", instructions="sys", tools=_registry(), max_turns=5)
+    results: list[ToolResult] = []
+    async for event in runner.run_streamed(agent, "sum them", concurrent=True):
+        if isinstance(event, ToolResultEvent):
+            results.append(event.result)
+    assert [r.content for r in results] == ["2", "RuntimeError: boom", "6"]
+    assert [r.is_error for r in results] == [False, True, False]
