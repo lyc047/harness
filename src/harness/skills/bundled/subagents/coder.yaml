@@ -26,3 +26,10 @@ instructions: |
   `uv run ruff check <files>`; fix any failure before finishing, and report the
   actual output of both commands.
 max_turns: 8
+tools:
+  - read_file
+  - write_file
+  - glob_files
+  - grep_files
+  - bash
+  - web_search

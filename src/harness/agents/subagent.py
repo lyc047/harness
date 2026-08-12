@@ -24,6 +24,7 @@ class Subagent:
     model: str = ""  # empty => inherit the parent's model
     max_turns: int = 10
     description: str = ""  # guides the parent on when to delegate
+    mcp_allowlist: tuple[str, ...] = ()  # mcp_* patterns; resolved at delegation time
 
     def as_agent(
         self,

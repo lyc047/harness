@@ -15,3 +15,9 @@ instructions: |
   If the parent will need these findings composed into a document, put
   `doc_writer` in RECOMMENDED NEXT STEP.
 max_turns: 8
+tools:
+  - read_file
+  - glob_files
+  - grep_files
+  - bash
+  - web_search

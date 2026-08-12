@@ -14,3 +14,7 @@ instructions: |
   If something is not found, say so explicitly instead of guessing. Keep the
   list tight and under 200 words.
 max_turns: 6
+tools:
+  - glob_files
+  - grep_files
+  - bash

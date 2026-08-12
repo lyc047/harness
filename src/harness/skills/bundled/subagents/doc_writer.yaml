@@ -14,3 +14,7 @@ instructions: |
   a short summary of the document produced, its path, and any open questions
   for the user.
 max_turns: 12
+tools:
+  - read_file
+  - write_file
+  - bash

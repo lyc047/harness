@@ -25,6 +25,7 @@ import yaml
 from harness.agents.subagent import Subagent
 from harness.skills.registry import BUNDLED_SKILLS_DIR
 from harness.tools.builtin import builtin_registry
+from harness.tools.registry import ToolRegistry
 
 # Subagent material lives in this subdirectory. The main SkillRegistry never
 # scans it (it only globs top-level ``*.md``), so subagent skills/configs never
@@ -83,6 +84,27 @@ def _with_delivery(instructions: str) -> str:
     return f"{instructions.rstrip()}\n\n{DELIVERY_CONTRACT}"
 
 
+def _build_tools(allowlist: tuple[str, ...]) -> tuple[ToolRegistry, tuple[str, ...]]:
+    """Resolve a spec's tools into a builtin registry + carried mcp_* patterns.
+
+    An empty allowlist means "all builtins" (backwards compatible). ``mcp_*``
+    entries are not builtins — they are carried to the Subagent's
+    ``mcp_allowlist`` and resolved against the parent's registry at delegation
+    time (see orchestrator.resolve_mcp_tools). Unknown names are skipped.
+    """
+    builtins = builtin_registry()
+    if not allowlist:
+        return builtins, ()
+    registry = ToolRegistry()
+    mcp: list[str] = []
+    for name in allowlist:
+        if name.startswith("mcp_"):
+            mcp.append(name)
+        elif (t := builtins.get(name)) is not None:
+            registry.register(t)
+    return registry, tuple(mcp)
+
+
 @dataclass
 class SubagentSpec:
     """A parsed YAML config for one subagent (the declarative source of truth)."""
@@ -93,6 +115,7 @@ class SubagentSpec:
     skill: str = ""  # optional subagent skill name; body appended if present
     model: str = ""  # per-subagent model override; empty => inherit
     max_turns: int = 10
+    tools: tuple[str, ...] = ()  # empty => all builtins (backwards compatible)
 
 
 class SubagentRegistry:
@@ -125,6 +148,11 @@ class SubagentRegistry:
             turns = int(max_turns) if max_turns not in (None, "") else 10
         except (TypeError, ValueError):
             turns = 10
+        tools_raw = data.get("tools")
+        if isinstance(tools_raw, list):
+            tools = tuple(str(t) for t in tools_raw if isinstance(t, (str, int)))
+        else:
+            tools = ()
         return SubagentSpec(
             name=str(data.get("name") or path.stem),
             description=str(data.get("description") or ""),
@@ -132,6 +160,7 @@ class SubagentRegistry:
             skill=str(data.get("skill") or ""),
             model=str(data.get("model") or ""),
             max_turns=turns,
+            tools=tools,
         )
 
     def discover(self) -> list[SubagentSpec]:
@@ -159,6 +188,8 @@ class SubagentRegistry:
         return self.discover()
 
     def get(self, name: str) -> SubagentSpec | None:
+        if not self._specs:
+            self.discover()
         return self._specs.get(name)
 
     def names(self) -> list[str]:
@@ -176,11 +207,13 @@ class SubagentRegistry:
         instructions = spec.instructions
         if spec.skill:
             instructions = _with_skill(instructions, spec.skill)
+        registry, mcp_allowlist = _build_tools(spec.tools)
         return Subagent(
             name=spec.name,
             description=spec.description,
             instructions=_with_delivery(instructions),
-            tools=builtin_registry(),
+            tools=registry,
+            mcp_allowlist=mcp_allowlist,
             model=spec.model,
             max_turns=spec.max_turns,
         )

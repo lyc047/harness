@@ -21,3 +21,7 @@ instructions: |
   finishing. Return a short summary: what you did, the file paths touched, and
   what changed.
 max_turns: 8
+tools:
+  - read_file
+  - write_file
+  - bash

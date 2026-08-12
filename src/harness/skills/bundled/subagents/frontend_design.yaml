@@ -16,3 +16,7 @@ instructions: |
   a short summary of the design decisions and any files you wrote. Prefer
   vanilla HTML/CSS/JS; no build step unless the task requires one.
 max_turns: 10
+tools:
+  - read_file
+  - write_file
+  - bash
