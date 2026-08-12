@@ -57,7 +57,7 @@ def add_example_subagents(
     stack: CoreStack,
     *,
     subagent_model: str = "",
-    on_event: Callable[[str, object], Awaitable[None]] | None = None,
+    on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
 ) -> None:
     """Register the built-in researcher/coder subagents as delegate tools.
 

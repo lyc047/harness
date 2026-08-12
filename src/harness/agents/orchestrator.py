@@ -8,6 +8,7 @@ so the parent sees the subagent's answer like any other tool outcome.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -119,7 +120,7 @@ class SubagentTool(Tool):
         subagent: Subagent,
         runner: Runner,
         model: str,
-        on_event: Callable[[str, object], Awaitable[None]] | None = None,
+        on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -175,8 +176,9 @@ class SubagentTool(Tool):
             expected_output=str(kwargs.get("expected_output") or "").strip(),
         )
         agent = self.subagent.as_agent(model=self._model)
+        run_id = uuid.uuid4().hex
         if self._on_event is not None:
-            await self._on_event(self.subagent.name, SubagentRunStart())
+            await self._on_event(run_id, self.subagent.name, SubagentRunStart())
         # Stream the nested run; when a sink is attached, forward every event
         # so the UI can render the subagent's own turns/tools in place. Without
         # a sink the events are dropped and we only keep the final output —
@@ -187,7 +189,7 @@ class SubagentTool(Tool):
         try:
             async for event in self._runner.run_streamed(agent, brief, session_id=None):
                 if self._on_event is not None and not isinstance(event, RunDone):
-                    await self._on_event(self.subagent.name, event)
+                    await self._on_event(run_id, self.subagent.name, event)
                 if isinstance(event, RunDone):
                     result = event.result
                     output = result.final_output or output
@@ -204,7 +206,8 @@ class SubagentTool(Tool):
             is_error = True
         if self._on_event is not None:
             await self._on_event(
-                self.subagent.name, SubagentRunEnd(output=output, turns=turns, is_error=is_error)
+                run_id, self.subagent.name,
+                SubagentRunEnd(output=output, turns=turns, is_error=is_error),
             )
         if is_error:
             return ToolResult.error(output, agent=self.subagent.name)
@@ -217,7 +220,7 @@ def subagent_as_tool(
     runner: Runner,
     default_model: str,
     *,
-    on_event: Callable[[str, object], Awaitable[None]] | None = None,
+    on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
 ) -> Tool:
     """Wrap a Subagent as a Tool the parent agent can call."""
     description = subagent.description or f"Delegate a subtask to the {subagent.name} subagent."
@@ -237,7 +240,7 @@ def add_subagents(
     subagents: list[Subagent],
     *,
     default_model: str | None = None,
-    on_event: Callable[[str, object], Awaitable[None]] | None = None,
+    on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
 ) -> None:
     """Register every subagent as a delegation tool on ``agent``.
 

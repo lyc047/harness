@@ -674,6 +674,11 @@ async def test_runtime_subagent_events_forwarded(make_provider, tmp_path) -> Non
     assert start["agent"] == "researcher"
 
     sub_events = [f for f in frames if f["type"] == "subagent_event"]
+    assert start["run_id"]
+    end = next(f for f in frames if f["type"] == "subagent_end")
+    assert end["run_id"] == start["run_id"]
+    for ev in sub_events:
+        assert ev["run_id"] == start["run_id"]
     ev_types = [f["event"]["type"] for f in sub_events]
     assert "tool_call" in ev_types
     assert "tool_result" in ev_types

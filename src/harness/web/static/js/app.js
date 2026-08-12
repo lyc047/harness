@@ -310,7 +310,7 @@
 
   // ---------------------------------------------------------------- subagent run view
 
-  function startSubagentRun(name) {
+  function startSubagentRun(name, runId) {
     const parent = state.lastAssistantEl;
     if (!parent) return;
     const card = document.createElement('div');
@@ -336,6 +336,7 @@
 
     subagentStack.push({
       name: name,
+      runId: runId,
       el: card,
       body: body,
       text: '',
@@ -347,11 +348,11 @@
     scrollBottom();
   }
 
-  function routeSubagentEvent(name, ev) {
-    // events arrive depth-first; find the innermost open run for this agent
+  function routeSubagentEvent(runId, agent, ev) {
+    // events arrive depth-first; find the innermost open run with this run_id
     let run = null;
     for (let i = subagentStack.length - 1; i >= 0; i--) {
-      if (subagentStack[i].name === name) { run = subagentStack[i]; break; }
+      if (subagentStack[i].runId === runId) { run = subagentStack[i]; break; }
     }
     if (!run) return;
 
@@ -437,10 +438,10 @@
   }
 
   function endSubagentRun(msg) {
-    // close the innermost open run with this name
+    // close the innermost open run with this run_id
     let idx = -1;
     for (let i = subagentStack.length - 1; i >= 0; i--) {
-      if (subagentStack[i].name === msg.agent) { idx = i; break; }
+      if (subagentStack[i].runId === msg.run_id) { idx = i; break; }
     }
     if (idx === -1) return;
     const run = subagentStack[idx];
@@ -841,10 +842,10 @@
         updateToolCard(msg.tool_call_id, msg);
         break;
       case 'subagent_start':
-        startSubagentRun(msg.agent);
+        startSubagentRun(msg.agent, msg.run_id);
         break;
       case 'subagent_event':
-        routeSubagentEvent(msg.agent, msg.event);
+        routeSubagentEvent(msg.run_id, msg.agent, msg.event);
         break;
       case 'subagent_end':
         endSubagentRun(msg);

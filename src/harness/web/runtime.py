@@ -165,18 +165,20 @@ class Runtime:
             on_event=self._forward_subagent_event,
         )
 
-    async def _forward_subagent_event(self, agent: str, event: object) -> None:
+    async def _forward_subagent_event(self, run_id: str, agent: str, event: object) -> None:
         """Forward a nested subagent run's event to the client.
 
-        The subagent's stream events are wrapped with the agent name so the UI
-        can route them into the right card; the run markers bracket the view.
+        Each delegated run carries its own ``run_id`` so the UI can key nested
+        run views by instance — two concurrent delegates of the same subagent,
+        or a depth-2 nested run, each get their own card.
         """
         if isinstance(event, SubagentRunStart):
-            await self._emit({"type": "subagent_start", "agent": agent})
+            await self._emit({"type": "subagent_start", "run_id": run_id, "agent": agent})
         elif isinstance(event, SubagentRunEnd):
             await self._emit(
                 {
                     "type": "subagent_end",
+                    "run_id": run_id,
                     "agent": agent,
                     "output": event.output,
                     "turns": event.turns,
@@ -187,7 +189,7 @@ class Runtime:
             frame = serialize_event(event)
             if frame is not None:
                 await self._emit(
-                    {"type": "subagent_event", "agent": agent, "event": frame}
+                    {"type": "subagent_event", "run_id": run_id, "agent": agent, "event": frame}
                 )
 
     @property
