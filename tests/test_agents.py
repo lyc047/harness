@@ -427,3 +427,84 @@ def test_subagent_budget_tracks_and_resets() -> None:
     assert b.remaining() == -1  # over-run is recorded, not clamped
     b.reset()
     assert b.remaining() == 10
+
+
+# ---- advanced mode: nested delegation, budget enforcement ---- #
+
+
+def test_advanced_add_subagents_builds_nested_delegates(make_provider) -> None:
+    from harness.agents.orchestrator import add_subagents
+
+    agent = Agent(name="parent", instructions="p", model="m")
+    runner = Runner(make_provider())
+    add_subagents(agent, runner, [_subagent("a"), _subagent("b")], advanced=True)
+    assert set(agent.tools.names()) == {"delegate_to_a", "delegate_to_b"}
+    tool_a = agent.tools.get("delegate_to_a")
+    assert tool_a is not None
+    # every OTHER subagent is a nested delegate; never itself
+    assert sorted(t.name for t in tool_a._nested_delegates) == ["delegate_to_b"]
+    # nested delegates carry no further delegates (structural depth cap of 2)
+    nested_b = tool_a._nested_delegates[0]
+    assert nested_b._nested_delegates == ()
+    assert nested_b._concurrent is True
+    assert tool_a._concurrent is True
+
+
+def test_attach_delegation_protocol_swaps_variants() -> None:
+    from harness.agents.orchestrator import (
+        DELEGATION_PROTOCOL,
+        DELEGATION_PROTOCOL_ADVANCED,
+        attach_delegation_protocol,
+    )
+
+    agent = Agent(name="parent", instructions="base", model="m")
+    attach_delegation_protocol(agent)
+    assert agent.instructions.count("Delegation protocol") == 1
+    assert agent.instructions.endswith(DELEGATION_PROTOCOL)
+    attach_delegation_protocol(agent, advanced=True)
+    assert agent.instructions.count("Delegation protocol") == 1  # swapped, not appended
+    assert agent.instructions.endswith(DELEGATION_PROTOCOL_ADVANCED)
+    attach_delegation_protocol(agent)
+    assert agent.instructions.count("Delegation protocol") == 1
+    assert agent.instructions.endswith(DELEGATION_PROTOCOL)
+
+
+async def test_advanced_nested_delegation_two_levels(make_provider) -> None:
+    """parent -> a -> b: level-2 subagent runs inside the level-1 subagent's
+    isolated stream, results bubble back through the delegate chain."""
+    from harness.agents.orchestrator import add_subagents
+
+    script = [
+        LLMResponse(
+            tool_calls=[ToolCall(id="p1", name="delegate_to_a", arguments='{"task": "outer"}')]
+        ),
+        LLMResponse(
+            tool_calls=[ToolCall(id="a1", name="delegate_to_b", arguments='{"task": "inner"}')]
+        ),
+        LLMResponse(final_text="B delivered"),
+        LLMResponse(final_text="A delivered"),
+        LLMResponse(final_text="parent done"),
+    ]
+    provider = make_provider(script)
+    agent = Agent(name="parent", instructions="p", model="m")
+    runner = Runner(provider)
+    add_subagents(agent, runner, [_subagent("a"), _subagent("b")], advanced=True)
+
+    result = await runner.run(agent, "go", session_id=None)
+    assert result.final_output == "parent done"
+
+
+async def test_subagent_budget_exhausted_returns_error(make_provider) -> None:
+    from harness.agents.orchestrator import SubagentBudget, subagent_as_tool
+
+    budget = SubagentBudget(total=1)
+    runner = Runner(make_provider())
+    tool = subagent_as_tool(
+        _subagent(), runner, default_model="m", budget=budget, advanced=True
+    )
+    assert not (await tool.invoke(task="x")).is_error
+    budget.record(1)
+    denied = await tool.invoke(task="y")
+    assert denied.is_error
+    assert "budget exhausted" in denied.content
+    # nothing ran for the denied call

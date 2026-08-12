@@ -58,6 +58,7 @@ def add_example_subagents(
     *,
     subagent_model: str = "",
     on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
+    advanced: bool = False,
 ) -> None:
     """Register the built-in researcher/coder subagents as delegate tools.
 
@@ -68,6 +69,9 @@ def add_example_subagents(
     (``HARNESS_SUBAGENT_MODEL``); empty means they use the parent's model.
     ``on_event`` (if given) is forwarded the events of each nested subagent run
     so a caller can render the subagent's turns/tools (web run view).
+    ``advanced`` turns on nested delegation: each subagent gains delegate tools
+    for the others (depth-2), runs its own turns concurrently, and shares the
+    stack's per-run turn budget.
     """
     from harness.agents.examples import example_subagents
     from harness.agents.orchestrator import add_subagents, attach_delegation_protocol
@@ -78,10 +82,13 @@ def add_example_subagents(
         example_subagents(),
         default_model=subagent_model or None,
         on_event=on_event,
+        concurrent=advanced,
+        budget=stack.subagent_budget if advanced else None,
+        advanced=advanced,
     )
     # Tell the parent to write self-contained delegation briefs, so isolated
     # subagents (which can't see the conversation) get the context they need.
-    attach_delegation_protocol(stack.agent)
+    attach_delegation_protocol(stack.agent, advanced=advanced)
 
 
 def load_permissions(settings: Settings) -> Permissions:

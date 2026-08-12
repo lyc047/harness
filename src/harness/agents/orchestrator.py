@@ -63,6 +63,25 @@ you want a handoff suggestion, ask for it explicitly in `expected_output`
 reliable than hoping the subagent volunteers one.
 """
 
+# Advanced mode: appended after DELEGATION_PROTOCOL so a level-1 subagent knows
+# it can hand off a sub-task once more (structurally capped at two levels).
+DELEGATION_PROTOCOL_ADVANCED = DELEGATION_PROTOCOL + """
+
+## Deeper delegation (advanced mode)
+
+You can also delegate a sub-task to another subagent via `delegate_to_<name>`,
+the same way your parent delegates to you. Give it a complete, self-contained
+brief. Nested delegation is at most two levels deep — never hand off a task
+you can do yourself just to chain subagents.
+"""
+
+# Short hint appended to level-1 subagents' agents in advanced mode.
+DELEGATION_HINT = (
+    "You can delegate a sub-task to another subagent via its `delegate_to_<name>` "
+    "tool. Choose the best-fit subagent and give it a self-contained brief. "
+    "Nested delegation is at most two levels deep."
+)
+
 
 def _compose_brief(
     task: str,
@@ -121,6 +140,11 @@ class SubagentTool(Tool):
         runner: Runner,
         model: str,
         on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
+        concurrent: bool = False,
+        budget: SubagentBudget | None = None,
+        nested_delegates: tuple[Tool, ...] = (),
+        nested_hint: str = "",
+        advanced: bool = False,
     ) -> None:
         super().__init__(
             name=name,
@@ -162,6 +186,11 @@ class SubagentTool(Tool):
         self._runner = runner
         self._model = model
         self._on_event = on_event
+        self._concurrent = concurrent
+        self._budget = budget
+        self._nested_delegates = nested_delegates
+        self._nested_hint = nested_hint
+        self._advanced = advanced
 
     async def invoke(self, **kwargs: Any) -> ToolResult:
         task = str(kwargs.get("task") or kwargs.get("prompt") or "").strip()
@@ -175,7 +204,13 @@ class SubagentTool(Tool):
             constraints=str(kwargs.get("constraints") or "").strip(),
             expected_output=str(kwargs.get("expected_output") or "").strip(),
         )
-        agent = self.subagent.as_agent(model=self._model)
+        if self._advanced and self._budget is not None and self._budget.remaining() <= 0:
+            return ToolResult.error("subagent budget exhausted", agent=self.subagent.name)
+        agent = self.subagent.as_agent(
+            model=self._model,
+            extra_tools=self._nested_delegates,
+            extra_instructions=self._nested_hint,
+        )
         run_id = uuid.uuid4().hex
         if self._on_event is not None:
             await self._on_event(run_id, self.subagent.name, SubagentRunStart())
@@ -187,7 +222,9 @@ class SubagentTool(Tool):
         turns = 0
         is_error = False
         try:
-            async for event in self._runner.run_streamed(agent, brief, session_id=None):
+            async for event in self._runner.run_streamed(
+                agent, brief, session_id=None, concurrent=self._concurrent
+            ):
                 if self._on_event is not None and not isinstance(event, RunDone):
                     await self._on_event(run_id, self.subagent.name, event)
                 if isinstance(event, RunDone):
@@ -204,6 +241,8 @@ class SubagentTool(Tool):
             logger.warning("subagent %r raised %s: %s", self.subagent.name, type(exc).__name__, exc)
             output = f"{type(exc).__name__}: {exc}"
             is_error = True
+        if self._budget is not None:
+            self._budget.record(turns)
         if self._on_event is not None:
             await self._on_event(
                 run_id, self.subagent.name,
@@ -221,6 +260,11 @@ def subagent_as_tool(
     default_model: str,
     *,
     on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
+    concurrent: bool = False,
+    budget: SubagentBudget | None = None,
+    nested_delegates: tuple[Tool, ...] = (),
+    nested_hint: str = "",
+    advanced: bool = False,
 ) -> Tool:
     """Wrap a Subagent as a Tool the parent agent can call."""
     description = subagent.description or f"Delegate a subtask to the {subagent.name} subagent."
@@ -231,6 +275,11 @@ def subagent_as_tool(
         runner=runner,
         model=subagent.model or default_model,
         on_event=on_event,
+        concurrent=concurrent,
+        budget=budget,
+        nested_delegates=nested_delegates,
+        nested_hint=nested_hint,
+        advanced=advanced,
     )
 
 
@@ -241,26 +290,63 @@ def add_subagents(
     *,
     default_model: str | None = None,
     on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
+    concurrent: bool = False,
+    budget: SubagentBudget | None = None,
+    advanced: bool = False,
 ) -> None:
     """Register every subagent as a delegation tool on ``agent``.
 
-    ``default_model`` is the model subagents inherit (a configured cheaper
-    tier); it falls back to the parent agent's model when unset. A subagent's
-    own ``model`` field still wins over both. ``on_event`` (if given) receives
-    every event of each nested subagent run, bracketed by the run markers.
+    ``advanced`` turns on nesting: each subagent's agent gains delegate tools
+    for every *other* subagent (one more level, structurally capped — nested
+    delegates carry no further delegates, so delegation can never cycle).
+    Advanced mode also runs each subagent's own turns concurrently and passes
+    ``budget`` so nested runs share the per-run turn budget.
     """
     base = default_model or agent.model
+    if not advanced:
+        for sa in subagents:
+            agent.tools.register(
+                subagent_as_tool(sa, runner, base, on_event=on_event)
+            )
+        return
+    level2 = {
+        sa.name: subagent_as_tool(
+            sa, runner, base,
+            on_event=on_event, concurrent=True, budget=budget, advanced=True,
+        )
+        for sa in subagents
+    }
     for sa in subagents:
-        agent.tools.register(subagent_as_tool(sa, runner, base, on_event=on_event))
+        nested = tuple(t for name, t in level2.items() if name != sa.name)
+        agent.tools.register(
+            subagent_as_tool(
+                sa, runner, base,
+                on_event=on_event,
+                concurrent=True,
+                budget=budget,
+                nested_delegates=nested,
+                nested_hint=DELEGATION_HINT,
+                advanced=True,
+            )
+        )
 
 
-def attach_delegation_protocol(agent: Agent) -> None:
-    """Append delegation guidance to a parent agent's instructions.
+def attach_delegation_protocol(agent: Agent, *, advanced: bool = False) -> None:
+    """Append (or replace) delegation guidance to a parent agent's instructions.
 
-    Called when subagents are enabled so the parent writes complete,
-    self-contained delegation briefs instead of vague one-liners.
+    Reversible: strips any previously-appended protocol block (either variant)
+    before appending the one for the requested mode, so re-registering delegate
+    tools on an advanced toggle never duplicates or leaves stale guidance.
     """
-    agent.instructions = f"{agent.instructions.rstrip()}\n\n{DELEGATION_PROTOCOL}"
+    stripped = agent.instructions.rstrip()
+    for variant in (DELEGATION_PROTOCOL_ADVANCED, DELEGATION_PROTOCOL):
+        # Variants end with a trailing newline that .rstrip() above removes, so
+        # match against the rstripped text and slice by that same length.
+        if stripped.endswith(variant.rstrip()):
+            stripped = stripped[: -len(variant.rstrip())].rstrip()
+            break
+    protocol = DELEGATION_PROTOCOL_ADVANCED if advanced else DELEGATION_PROTOCOL
+    agent.instructions = f"{stripped}\n\n{protocol}"
 
 
 class SubagentBudget:
