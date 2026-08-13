@@ -6,8 +6,9 @@
 > #6 flash 无升级到 pro 路径、#7 基准样本小**。与结果文档 §7 局限对应：
 > [2026-08-13-token-economy-bench-results.md](2026-08-13-token-economy-bench-results.md)。
 
-> **状态（2026-08-13）：四项全部实现并过质量门（ruff/mypy/pytest 全绿，门禁自测 好实现 5/5 / 凑词 <5）。**
-> 真实 API 基准重跑、专家审阅与 v2 结果文档**推迟**到后续跑实验时执行（见文末「完成记录」）。
+> **状态（2026-08-13）：全部完成。** 四项实现过质量门后，真实 API 基准已跑（8 轮全 clean，降幅 97.7%），
+> 专家审阅已逐轮完成（5 维 rubric，均分 6.4–9.0 有区分度，无满分），结果见
+> [2026-08-13-token-economy-v2-results.md](2026-08-13-token-economy-v2-results.md)。
 
 ---
 
@@ -23,7 +24,7 @@
 **附带**：`SPRINT_TASK` 更复杂化（PATCH/DELETE `/api/sessions/<id>`、`GET /api/stats`、重启持久化、前端实时计时+历史+统计、全端点校验）；`score_robustness` 探针 4→6（`patch_huge_id`/`delete_huge_id`）。
 **门误杀修复**：readme 门最初误杀「标题后跟空行再 `## Overview`」的合法结构，门内跳过首个 header（文档标题）解决。
 
-**推迟（后续跑实验时执行）**：真实 API 基准重跑（`HARNESS_COMPARE_RUNS=normal=3,forced-advanced=5`）、专家审阅（5 维 rubric 严格评分，避免满分）、`2026-08-13-token-economy-v2-results.md`。
+**已执行（2026-08-13）**：真实 API 基准重跑（`HARNESS_COMPARE_RUNS=normal=3,forced-advanced=5`，8 轮全 clean）→ 降幅 97.7%、成本省 86.3%；专家审阅逐轮完成（5 维 rubric 严格评分，normal 6.4 / advanced 7.7，无满分，fa-3 9.0 唯一高分）→ `2026-08-13-token-economy-v2-results.md`。启动时修了一处 import 链 bug：`e2e_subagents_compare_v2/v6` 模块加载时 `int()` 共享 env，新格式 `normal=3,forced-advanced=5` 崩——改为容错解析 + 回归测试。
 
 ---
 

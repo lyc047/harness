@@ -37,7 +37,13 @@ from e2e_subagents_compare_v2 import (
     _wait_health,
 )
 
-RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
+# e2e_token_economy sets HARNESS_COMPARE_RUNS to the newer 'group=n' format;
+# tolerate it at import time (fall back to 3) — this legacy script only uses
+# the plain-int form in its own main().
+try:
+    RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
+except ValueError:
+    RUNS = 3
 # Single-agent (normal) runs of the full 10-file task routinely take 15-25 min
 # with a slow model; the delegated smoke run finished in ~8 min because the
 # subagents worked in parallel. 1800s gives single-agent runs room to finish,

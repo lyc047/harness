@@ -71,7 +71,13 @@ TRANSPORT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("server_bind", re.compile(r"uvicorn\.run")),
 ]
 
-RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
+# e2e_token_economy sets HARNESS_COMPARE_RUNS to the newer 'group=n' format
+# ("normal=3,forced-advanced=5"); this legacy script is imported by it, so the
+# eager int() parse must tolerate that value at import time (fall back to 3).
+try:
+    RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
+except ValueError:
+    RUNS = 3
 DELEGATE_PREFIX = "delegate_to_"
 
 # C rubric constants

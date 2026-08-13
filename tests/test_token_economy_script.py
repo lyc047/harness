@@ -1,5 +1,7 @@
 """Pure helpers of the token-economy benchmark (no network)."""
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -89,3 +91,20 @@ def test_fmt_stats_single_value_no_std():
 
 def test_fmt_stats_empty():
     assert _fmt_stats([]) == "n/a"
+
+
+def test_import_tolerates_grouped_runs_env():
+    """Regression: importing e2e_token_economy with HARNESS_COMPARE_RUNS in the
+    newer 'group=n' form must not crash the legacy v2/v6 modules it imports
+    (they eagerly int() the shared env at module load)."""
+    env = {**os.environ, "HARNESS_COMPARE_RUNS": "normal=3,forced-advanced=5"}
+    code = (
+        f"import sys; sys.path.insert(0, r'{SCRIPTS}'); "
+        "import e2e_token_economy; "
+        "assert e2e_token_economy.RUNS_SPEC == "
+        "{'normal': 3, 'forced-advanced': 5}"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    )
+    assert proc.returncode == 0, proc.stderr
