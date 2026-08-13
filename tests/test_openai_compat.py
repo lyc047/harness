@@ -3,8 +3,10 @@
 We inject a fake AsyncOpenAI client so no network is involved.
 """
 
+import asyncio
 from types import SimpleNamespace
 
+import openai
 import pytest
 
 from harness.core.messages import Message
@@ -12,9 +14,15 @@ from harness.llm.base import StreamEnd, StreamReasoning, StreamText, StreamToolC
 from harness.llm.openai_compat import OpenAICompatProvider
 
 
-def _provider(fake_completions, *, track_usage=False) -> OpenAICompatProvider:
+def _provider(
+    fake_completions, *, track_usage=False, timeout=60.0
+) -> OpenAICompatProvider:
     p = OpenAICompatProvider(
-        model="deepseek-v4-flash", api_key="sk-test", retry_attempts=1, track_usage=track_usage
+        model="deepseek-v4-flash",
+        api_key="sk-test",
+        retry_attempts=1,
+        track_usage=track_usage,
+        timeout=timeout,
     )
     # Provider calls self._client.chat.completions.create(...) — mirror that chain.
     p._client = SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
@@ -41,11 +49,12 @@ class FakeCompletions:
 
     def __init__(self):
         self.chunks: list | None = None
+        self.stream_result = None  # overrides chunks when set (e.g. a stalled stream)
         self.plain_message = None
 
     async def create(self, **kwargs):
         if kwargs.get("stream"):
-            return _AsyncIterable(self.chunks or [])
+            return self.stream_result or _AsyncIterable(self.chunks or [])
         return SimpleNamespace(choices=[SimpleNamespace(message=self.plain_message)])
 
 
@@ -62,6 +71,17 @@ class _AsyncIterable:
             return next(self._it)
         except StopIteration:
             raise StopAsyncIteration from None
+
+
+class _StalledStream:
+    """A stream whose reads never complete within the provider's timeout."""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await asyncio.sleep(30)  # far longer than any test timeout
+        raise StopAsyncIteration from None
 
 
 @pytest.mark.asyncio
@@ -224,4 +244,19 @@ async def test_usage_tracking_off_by_default():
     fake.plain_message = SimpleNamespace(content="ok", reasoning_content=None, tool_calls=None)
     provider = _provider(fake)  # track_usage default False
     await provider.complete([Message.user("hi")])
+    assert provider.usage_log == []
+
+
+@pytest.mark.asyncio
+async def test_stream_stalled_read_raises_api_timeout():
+    """A stream whose chunks stop arriving must fail fast with a retryable
+    APITimeoutError — the SDK's connection timeout does not cover reads once
+    a stream is open (the CLOSE_WAIT hang in the token-economy benchmark)."""
+    fake = FakeCompletions()
+    fake.stream_result = _StalledStream()
+    provider = _provider(fake, timeout=0.1)
+
+    with pytest.raises(openai.APITimeoutError):
+        async for _ in provider.stream([Message.user("hi")]):
+            pass
     assert provider.usage_log == []

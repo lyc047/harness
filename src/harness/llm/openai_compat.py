@@ -15,6 +15,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 import openai
 from openai import AsyncOpenAI
 
@@ -116,7 +117,7 @@ class OpenAICompatProvider:
         acc: dict[int, dict[str, str]] = {}
 
         usage_recorded = False
-        async for chunk in stream:
+        async for chunk in self._iter_stream(stream):
             usage = getattr(chunk, "usage", None)
             if not usage_recorded and usage is not None:
                 self._record_usage(model or self.model, usage)
@@ -169,6 +170,29 @@ class OpenAICompatProvider:
         yield StreamEnd(response=response)
 
     # -- internals --
+
+    async def _iter_stream(self, stream: Any) -> AsyncIterator[Any]:
+        """Yield chunks, aborting a read that stalls past ``self._timeout``.
+
+        The SDK's ``timeout`` covers connection + request write/read *setup*,
+        but a stream that accepts the request and then goes silent (the
+        benchmark's CLOSE_WAIT hang) blocks ``__anext__`` indefinitely. Wrap
+        each read so a stalled chunk fails fast as ``openai.APITimeoutError``
+        (already in :data:`_RETRYABLE`) instead of hanging the whole run.
+        """
+        iterator = stream.__aiter__()
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    iterator.__anext__(), timeout=self._timeout
+                )
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                raise openai.APITimeoutError(
+                    request=httpx.Request("POST", self._base_url)
+                ) from exc
+            yield chunk
 
     async def _request(
         self,
