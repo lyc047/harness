@@ -44,7 +44,6 @@ from e2e_subagents_compare_v6 import (  # noqa: E402
     _prompt_forced,
     _run_pytest,
     _run_verify,
-    _write_coordinator,
 )
 from score_robustness import score as robust_score  # noqa: E402
 
@@ -183,11 +182,18 @@ async def _run_once(
         )
     prompt = _prompt_forced(str(out_dir)) if forced else _prompt(str(out_dir))
     try:
-        await stack.runner.run(stack.agent, prompt)
-    except Exception as exc:  # noqa: BLE001 — degrade, don't crash the benchmark
-        reason = f"{type(exc).__name__}: {exc}"
-    else:
-        reason = "ok"
+        try:
+            await stack.runner.run(stack.agent, prompt)
+        except Exception as exc:  # noqa: BLE001 — degrade, don't crash the benchmark
+            reason = f"{type(exc).__name__}: {exc}"
+        else:
+            reason = "ok"
+    finally:
+        # Each run builds its own Store (SQLite over aiosqlite). Closing it here
+        # — even on exception or asyncio.wait_for cancellation above — lets the
+        # non-daemon worker thread exit, so the process doesn't linger after
+        # main() returns.
+        await stack.store.close()
     seconds = time.monotonic() - started
     pro_u = sum_usage(pro.usage_log)
     flash_u = sum_usage(flash.usage_log)
@@ -358,7 +364,8 @@ def main() -> int:
         print("no HARNESS_SUBAGENT_API_KEY configured; skipping (exit 2)", file=sys.stderr)
         return 2
 
-    _write_coordinator()
+    # The coordinator ships bundled (src/harness/skills/bundled/subagents/
+    # coordinator.yaml); no runtime write needed.
     tmp = Path(tempfile.mkdtemp(prefix="harness-token-econ-"))
     settings = settings.replace(db_path=str(tmp / "harness.db"), subagent_budget=SUBAGENT_BUDGET)
     return asyncio.run(_run_all(settings, tmp))

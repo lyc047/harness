@@ -60,40 +60,10 @@ Write the report to {out}/report.md. Do not leave any section empty.
 
 COORDINATOR_YAML = REPO_ROOT / "skills" / "subagents" / f"{COORDINATOR_NAME}.yaml"
 
-COORDINATOR_INSTRUCTIONS = """\
-You are a research coordinator. You own the whole task end to end.
-
-YOUR TOOLS: you can read files, glob, grep, and web_search. You CANNOT write
-files and CANNOT run bash — you have no write_file or bash tool at all.
-
-When the deliverable must be written to a file, delegate the writing to the
-doc_writer subagent via the delegate_to_doc_writer tool: hand it your findings
-plus the target path, and let IT save the file. Do NOT ask the parent to write
-it — you drive the work.
-
-When you finish, return a short summary: what you researched, what was written,
-and the exact file path where the report now lives.
-"""
-
-COORDINATOR_YAML_TEXT = (
-    "name: " + COORDINATOR_NAME + "\n"
-    "description: Use when a whole multi-step task should run as one coordinated "
-    "job — it researches and hands the final write-off to the doc_writer subagent.\n"
-    "instructions: |\n"
-    + "".join("  " + line + "\n" for line in COORDINATOR_INSTRUCTIONS.splitlines())
-    + 'model: ""\n'
-    "max_turns: 12\n"
-    "tools:\n"
-    "  - read_file\n"
-    "  - glob_files\n"
-    "  - grep_files\n"
-    "  - web_search\n"
-)
-
-
-def _write_coordinator() -> None:
-    COORDINATOR_YAML.parent.mkdir(parents=True, exist_ok=True)
-    COORDINATOR_YAML.write_text(COORDINATOR_YAML_TEXT, encoding="utf-8")
+# The coordinator ships bundled (src/harness/skills/bundled/subagents/
+# coordinator.yaml); the prompt above tells it how to run this report. No
+# runtime write — a stale skills/subagents/coordinator.yaml from a killed run
+# shadows the bundled set and breaks subagent-description tests.
 
 
 def _prompt(out: str) -> str:
@@ -245,7 +215,6 @@ def main() -> int:
         print("no DEEPSEEK_API_KEY configured; skipping (exit 2)", file=sys.stderr)
         return 2
 
-    _write_coordinator()
     port = _free_port()
     env = {**os.environ, "HARNESS_SUBAGENTS": "1"}
     proc = subprocess.Popen(

@@ -149,49 +149,12 @@ SPRINT_TASK_FORCED = (
     + SPRINT_TASK
 )
 
-COORDINATOR_INSTRUCTIONS = """\
-You are an implementation coordinator. You own the whole sprint end to end.
-
-YOUR TOOLS: read_file, glob_files, grep_files, web_search. You CANNOT write
-files and CANNOT run bash — you have no write_file or bash tool at all.
-
-Your job is to decompose the pomodoro task into its modules and hand each one
-to the best-fit subagent via your delegate_to_* tools:
-  - delegate_to_coder: engine.py, storage.py, api.py and their test files
-  - delegate_to_frontend_design: static/index.html, app.js, style.css
-  - delegate_to_security_reviewer: a read-only audit of storage.py and api.py
-    (SQL injection, input validation, oversized bodies, hardcoded credentials)
-  - delegate_to_doc_writer: README.md
-Run independent pieces in parallel (issue several delegate calls in one turn).
-Have the coder fix anything security_reviewer finds, then do a final read-only
-pass yourself over the files that exist to confirm the contract is met.
-
-When you finish, return a short summary: which subagent wrote which file, the
-audit outcome, and the exact path of the finished project.
-"""
-
-COORDINATOR_YAML_TEXT = (
-    "name: " + COORDINATOR_NAME + "\n"
-    "description: Use by default when a whole multi-module implementation "
-    "sprint should run as one coordinated job — it decomposes the task and "
-    "hands each module to the matching subagent.\n"
-    "instructions: |\n"
-    + "".join("  " + line + "\n" for line in COORDINATOR_INSTRUCTIONS.splitlines())
-    + 'model: ""\n'
-    "max_turns: 12\n"
-    "tools:\n"
-    "  - read_file\n"
-    "  - glob_files\n"
-    "  - grep_files\n"
-    "  - web_search\n"
-)
-
+# The coordinator now ships as a tracked bundled subagent config
+# (src/harness/skills/bundled/subagents/coordinator.yaml), discovered alongside
+# the other default subagents. Benchmarks no longer write a runtime override
+# into the gitignored skills/subagents/ dir — a stale file left there by a
+# killed run shadowed the bundled set and broke subagent-description tests.
 COORDINATOR_YAML = REPO_ROOT / "skills" / "subagents" / f"{COORDINATOR_NAME}.yaml"
-
-
-def _write_coordinator() -> None:
-    COORDINATOR_YAML.parent.mkdir(parents=True, exist_ok=True)
-    COORDINATOR_YAML.write_text(COORDINATOR_YAML_TEXT, encoding="utf-8")
 
 
 def _salvage_run(
@@ -416,7 +379,6 @@ def main() -> int:
         print(f"missing {VERIFY_TEMPLATE} — run Task 3 first", file=sys.stderr)
         return 1
 
-    _write_coordinator()
     port = _free_port()
     env = {
         **os.environ,
