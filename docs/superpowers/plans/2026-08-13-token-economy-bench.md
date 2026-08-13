@@ -775,3 +775,4 @@ git commit -m "docs: token-economy benchmark results (advanced saves pro tokens,
 4. `_auto_approve` 标注为 `Callable[[ToolCall], Awaitable[str]]`（`harness.core.messages.ToolCall`），匹配 `ApprovalPrompt`。
 5. `tests/test_compose.py::test_subagent_provider_built_from_env_key` 不用 monkeypatch（`Settings.from_env(dict)` 不读进程 env），直接把 subagent key 放进 dict。
 6. `tests/test_token_economy_script.py::test_sum_usage_aggregates` 的 reasoning 断言修正为 200_000（两个记录都带 reasoning）。
+7. `_run_all` 末尾的 `PRO-TOKEN REDUCTION` 只统计 `reason == "ok"` 的干净轮：全量跑时 forced-advanced-2 在一次子代理重派后网络卡死、被 1800s 超时 salvage（pro_tokens=0），若计入会把真实降幅（96.6%）虚夸成 97.8%——超时是失败轮，不是省 token。

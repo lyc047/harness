@@ -172,9 +172,9 @@ audit outcome, and the exact path of the finished project.
 
 COORDINATOR_YAML_TEXT = (
     "name: " + COORDINATOR_NAME + "\n"
-    "description: Use when a whole multi-module implementation sprint should "
-    "run as one coordinated job — it decomposes the task and hands each module "
-    "to the matching subagent.\n"
+    "description: Use by default when a whole multi-module implementation "
+    "sprint should run as one coordinated job — it decomposes the task and "
+    "hands each module to the matching subagent.\n"
     "instructions: |\n"
     + "".join("  " + line + "\n" for line in COORDINATOR_INSTRUCTIONS.splitlines())
     + 'model: ""\n'

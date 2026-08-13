@@ -329,13 +329,19 @@ async def _run_all(settings: Settings, tmp: Path) -> int:
         ):
             print(f"      {key:18s} {_spread([float(m[key]) for m in ms])}{unit}")
 
-    n = [r["metrics"]["pro_tokens"] for r in by.get("normal", [])]
-    a = [r["metrics"]["pro_tokens"] for r in by.get("forced-advanced", [])]
+    # Reduction compares clean runs only (reason == "ok"); a salvaged timeout
+    # records pro_tokens=0, which would masquerade as a huge saving.
+    def clean(g: str) -> list[float]:
+        return [r["metrics"]["pro_tokens"] for r in by.get(g, []) if r["reason"] == "ok"]
+
+    n = clean("normal")
+    a = clean("forced-advanced")
     red = pro_reduction(a, n)
     if red is not None:
         print(
-            f"\n  PRO-TOKEN REDUCTION: {red * 100:.1f}%  "
-            f"(normal mean={sum(n) / len(n):.0f} -> advanced mean={sum(a) / len(a):.0f})"
+            f"\n  PRO-TOKEN REDUCTION (clean runs): {red * 100:.1f}%  "
+            f"(normal n={len(n)} mean={sum(n) / len(n):.0f} -> "
+            f"advanced n={len(a)} mean={sum(a) / len(a):.0f})"
         )
     else:
         print("\n  PRO-TOKEN REDUCTION: undefined (need >=1 completed run per group)")
