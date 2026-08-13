@@ -12,8 +12,10 @@ from harness.llm.base import StreamEnd, StreamReasoning, StreamText, StreamToolC
 from harness.llm.openai_compat import OpenAICompatProvider
 
 
-def _provider(fake_completions) -> OpenAICompatProvider:
-    p = OpenAICompatProvider(model="deepseek-v4-flash", api_key="sk-test", retry_attempts=1)
+def _provider(fake_completions, *, track_usage=False) -> OpenAICompatProvider:
+    p = OpenAICompatProvider(
+        model="deepseek-v4-flash", api_key="sk-test", retry_attempts=1, track_usage=track_usage
+    )
     # Provider calls self._client.chat.completions.create(...) — mirror that chain.
     p._client = SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
     return p
@@ -167,3 +169,54 @@ async def test_messages_include_reasoning_passthrough():
     msg = Message.assistant(content="done", reasoning_content="reasoning-to-keep")
     d = msg.to_openai_dict()
     assert d["reasoning_content"] == "reasoning-to-keep"
+
+
+def _usage(prompt_tokens, completion_tokens, reasoning_tokens=0):
+    return SimpleNamespace(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_records_usage_when_tracking():
+    fake = FakeCompletions()
+    fake.plain_message = SimpleNamespace(content="ok", reasoning_content=None, tool_calls=None)
+
+    async def create(**kwargs):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=fake.plain_message)],
+            usage=_usage(10, 5, 2),
+        )
+
+    fake.create = create
+    provider = _provider(fake, track_usage=True)
+    await provider.complete([Message.user("hi")])
+    assert provider.usage_log == [
+        {"model": "deepseek-v4-flash", "prompt_tokens": 10, "completion_tokens": 5, "reasoning_tokens": 2}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_records_usage_once_from_final_chunk():
+    fake = FakeCompletions()
+    c1 = _chunk(content="hi", finish_reason=None)
+    c1.usage = _usage(10, 5, 2)
+    c2 = _chunk(content=" there", finish_reason="stop")
+    c2.usage = _usage(10, 6, 3)  # should NOT be double counted
+    fake.chunks = [c1, c2]
+    provider = _provider(fake, track_usage=True)
+    events = [e async for e in provider.stream([Message.user("hi")])]
+    assert isinstance(events[-1], StreamEnd)
+    assert len(provider.usage_log) == 1
+    assert provider.usage_log[0]["completion_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_usage_tracking_off_by_default():
+    fake = FakeCompletions()
+    fake.plain_message = SimpleNamespace(content="ok", reasoning_content=None, tool_calls=None)
+    provider = _provider(fake)  # track_usage default False
+    await provider.complete([Message.user("hi")])
+    assert provider.usage_log == []

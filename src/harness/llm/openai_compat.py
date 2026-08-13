@@ -54,6 +54,7 @@ class OpenAICompatProvider:
         max_tool_calls: int = 128,
         retry_attempts: int = 3,
         retry_base_delay: float = 1.0,
+        track_usage: bool = False,
     ) -> None:
         self.model = model
         self.max_tool_calls = max_tool_calls
@@ -62,6 +63,8 @@ class OpenAICompatProvider:
         self._api_key = api_key
         self._base_url = base_url
         self._timeout = timeout
+        self.track_usage = track_usage
+        self.usage_log: list[dict[str, Any]] = []
         # The client is built lazily: newer openai versions raise
         # OpenAIError("Missing credentials") at construction, which would crash
         # the web server (which must boot without a key and surface the error
@@ -93,6 +96,7 @@ class OpenAICompatProvider:
     ) -> LLMResponse:
         wire = [m.to_openai_dict() for m in messages]
         resp = await self._request(wire, tools=tools, model=model)
+        self._record_usage(model or self.model, getattr(resp, "usage", None))
         return self._parse_message(resp)
 
     async def stream(
@@ -111,7 +115,12 @@ class OpenAICompatProvider:
         # Accumulate streaming tool-call deltas keyed by delta index.
         acc: dict[int, dict[str, str]] = {}
 
+        usage_recorded = False
         async for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if not usage_recorded and usage is not None:
+                self._record_usage(model or self.model, usage)
+                usage_recorded = True
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -210,4 +219,18 @@ class OpenAICompatProvider:
             final_text=message.content,
             tool_calls=tool_calls or None,
             reasoning_content=reasoning or None,
+        )
+
+    def _record_usage(self, model: str, usage: Any) -> None:
+        """Append one usage record; no-op unless ``track_usage`` is on."""
+        if not self.track_usage or usage is None:
+            return
+        details = getattr(usage, "completion_tokens_details", None)
+        self.usage_log.append(
+            {
+                "model": model,
+                "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                "reasoning_tokens": getattr(details, "reasoning_tokens", 0) or 0,
+            }
         )
