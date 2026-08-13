@@ -44,6 +44,14 @@ RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
 # and the salvage path below still records verify/pytest if one overruns.
 RUN_TIMEOUT = float(os.environ.get("HARNESS_COMPARE_TIMEOUT", "1800"))
 DELEGATE_PREFIX = "delegate_to_"
+
+
+class _RunFailed(Exception):
+    """A single run failed unrecoverably (e.g. the LLM API connection dropped).
+
+    The benchmark must continue with the remaining runs, salvaging whatever
+    files the failed run produced, rather than aborting everything.
+    """
 COORDINATOR_NAME = "coordinator"
 VERIFY_TEMPLATE = REPO_ROOT / "scripts" / "pomodoro_verify_template.py"
 
@@ -180,6 +188,44 @@ COORDINATOR_YAML = REPO_ROOT / "skills" / "subagents" / f"{COORDINATOR_NAME}.yam
 def _write_coordinator() -> None:
     COORDINATOR_YAML.parent.mkdir(parents=True, exist_ok=True)
     COORDINATOR_YAML.write_text(COORDINATOR_YAML_TEXT, encoding="utf-8")
+
+
+def _salvage_run(
+    label: str, i: int, out_dir: Path, *, reason: str, seconds: float
+) -> dict[str, Any]:
+    """Record a run that ended without a clean run_done (timeout / API failure).
+
+    WS-derived metrics are unknown; verify/pytest are computed from whatever
+    files exist so a slow-but-complete agent is not wasted.
+    """
+    verify_pass = _run_verify(out_dir)
+    pytest_passed = _run_pytest(out_dir)
+    print(
+        f"  salvaged {label}-{i}: verify={verify_pass}/5 pytest={pytest_passed}",
+        flush=True,
+    )
+    return {
+        "mode": label,
+        "out": str(out_dir),
+        "metrics": {
+            "seconds": seconds,
+            "delegations": 0,
+            "waves": 0,
+            "max_concurrency": 0,
+            "depth": 0,
+            "types": 0,
+            "sub_turns": 0,
+            "web_searches": 0,
+            "greps": 0,
+            "writes": 0,
+            "bash": 0,
+            "chain": [],
+            "verify_pass": verify_pass,
+            "pytest_passed": pytest_passed,
+        },
+        "run": i,
+        "reason": reason,
+    }
 
 
 def _prompt(out: str) -> str:
@@ -320,7 +366,7 @@ async def _run_mode(port: int, out: str, *, prompt: str, advanced: bool) -> dict
             elif t == "run_done":
                 break
             elif t == "run_error":
-                raise AssertionError(f"run_error: {frame}")
+                raise _RunFailed(frame.get("message", "run_error"))
             else:
                 last_was_delegate_call = False
 
@@ -416,42 +462,20 @@ def main() -> int:
                         )
                     )
                 except TimeoutError:
-                    # Salvage whatever the agent produced before we disconnected —
-                    # the WS stats are lost but verify/pytest still count.
                     print(
                         f"  {label}-{i}: TIMEOUT after {RUN_TIMEOUT:.0f}s — salvaging",
                         flush=True,
                     )
-                    verify_pass = _run_verify(out_dir)
-                    pytest_passed = _run_pytest(out_dir)
                     runs.append(
-                        {
-                            "mode": label,
-                            "out": str(out_dir),
-                            "metrics": {
-                                "seconds": RUN_TIMEOUT,
-                                "delegations": 0,
-                                "waves": 0,
-                                "max_concurrency": 0,
-                                "depth": 0,
-                                "types": 0,
-                                "sub_turns": 0,
-                                "web_searches": 0,
-                                "greps": 0,
-                                "writes": 0,
-                                "bash": 0,
-                                "chain": [],
-                                "verify_pass": verify_pass,
-                                "pytest_passed": pytest_passed,
-                            },
-                            "run": i,
-                            "timed_out": True,
-                        }
+                        _salvage_run(label, i, out_dir, reason="timeout", seconds=RUN_TIMEOUT)
                     )
-                    print(
-                        f"  salvaged {label}-{i}: verify={verify_pass}/5 "
-                        f"pytest={pytest_passed}",
-                        flush=True,
+                    continue
+                except _RunFailed as exc:
+                    print(f"  {label}-{i}: run failed ({exc}) — salvaging", flush=True)
+                    runs.append(
+                        _salvage_run(
+                            label, i, out_dir, reason=f"run_failed: {exc}", seconds=0.0
+                        )
                     )
                     continue
                 runs.append({"mode": label, "out": str(out_dir), "metrics": metrics, "run": i})
