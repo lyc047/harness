@@ -194,7 +194,12 @@ async def test_complete_records_usage_when_tracking():
     provider = _provider(fake, track_usage=True)
     await provider.complete([Message.user("hi")])
     assert provider.usage_log == [
-        {"model": "deepseek-v4-flash", "prompt_tokens": 10, "completion_tokens": 5, "reasoning_tokens": 2}
+        {
+            "model": "deepseek-v4-flash",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "reasoning_tokens": 2,
+        }
     ]
 
 
