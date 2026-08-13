@@ -17,6 +17,7 @@ from harness.agents.subagent import Subagent
 from harness.core.agent import Agent
 from harness.core.run_result import MaxTurnsExceeded
 from harness.core.runner import RunDone, Runner
+from harness.llm.base import LLMProvider
 from harness.observability.logging import get_logger
 from harness.tools.base import Tool, ToolResult
 from harness.tools.registry import ToolRegistry
@@ -189,6 +190,7 @@ class SubagentTool(Tool):
         parent_tools: ToolRegistry | None = None,
         nested_hint: str = "",
         advanced: bool = False,
+        provider: LLMProvider | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -236,6 +238,7 @@ class SubagentTool(Tool):
         self._parent_tools = parent_tools
         self._nested_hint = nested_hint
         self._advanced = advanced
+        self._provider = provider  # per-subagent LLM account; None => parent's
 
     async def invoke(self, **kwargs: Any) -> ToolResult:
         task = str(kwargs.get("task") or kwargs.get("prompt") or "").strip()
@@ -269,7 +272,8 @@ class SubagentTool(Tool):
         is_error = False
         try:
             async for event in self._runner.run_streamed(
-                agent, brief, session_id=None, concurrent=self._concurrent
+                agent, brief, session_id=None, concurrent=self._concurrent,
+                provider=self._provider,
             ):
                 if self._on_event is not None and not isinstance(event, RunDone):
                     await self._on_event(run_id, self.subagent.name, event)
@@ -316,8 +320,13 @@ def subagent_as_tool(
     parent_tools: ToolRegistry | None = None,
     nested_hint: str = "",
     advanced: bool = False,
+    provider: LLMProvider | None = None,
 ) -> Tool:
-    """Wrap a Subagent as a Tool the parent agent can call."""
+    """Wrap a Subagent as a Tool the parent agent can call.
+
+    ``provider`` is the LLM account the subagent talks to (own key/base_url);
+    ``None`` means it shares the parent's provider, differing only by model.
+    """
     description = subagent.description or f"Delegate a subtask to the {subagent.name} subagent."
     return SubagentTool(
         name=f"delegate_to_{subagent.name}",
@@ -332,6 +341,7 @@ def subagent_as_tool(
         parent_tools=parent_tools,
         nested_hint=nested_hint,
         advanced=advanced,
+        provider=provider,
     )
 
 
@@ -345,6 +355,7 @@ def add_subagents(
     concurrent: bool = False,
     budget: SubagentBudget | None = None,
     advanced: bool = False,
+    subagent_provider: LLMProvider | None = None,
 ) -> None:
     """Register every subagent as a delegation tool on ``agent``.
 
@@ -353,13 +364,16 @@ def add_subagents(
     delegates carry no further delegates, so delegation can never cycle).
     Advanced mode also runs each subagent's own turns concurrently and passes
     ``budget`` so nested runs share the per-run turn budget.
+    ``subagent_provider`` (if given) is the separate LLM account all subagents
+    use — their own API key / base URL, distinct from the parent's.
     """
     base = default_model or agent.model
     if not advanced:
         for sa in subagents:
             agent.tools.register(
                 subagent_as_tool(
-                    sa, runner, base, on_event=on_event, parent_tools=agent.tools
+                    sa, runner, base, on_event=on_event, parent_tools=agent.tools,
+                    provider=subagent_provider,
                 )
             )
         return
@@ -367,7 +381,7 @@ def add_subagents(
         sa.name: subagent_as_tool(
             sa, runner, base,
             on_event=on_event, concurrent=True, budget=budget, advanced=True,
-            parent_tools=agent.tools,
+            parent_tools=agent.tools, provider=subagent_provider,
         )
         for sa in subagents
     }
@@ -383,6 +397,7 @@ def add_subagents(
                 parent_tools=agent.tools,
                 nested_hint=DELEGATION_HINT,
                 advanced=True,
+                provider=subagent_provider,
             )
         )
 

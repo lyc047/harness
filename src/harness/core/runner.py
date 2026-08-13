@@ -104,14 +104,20 @@ class Runner:
         *,
         session_id: str | None = None,
         concurrent: bool = False,
+        provider: LLMProvider | None = None,
     ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
         """Stream events of a full run; a final :class:`RunDone` ends the stream.
 
         ``concurrent`` runs the tool calls of each multi-call turn in parallel
         (results preserved in call order; a failing call becomes an error
         result and does not abort its siblings). Default False = sequential.
+        ``provider`` overrides the Runner's provider for this run only — the
+        per-run model tiering seam (subagents may talk to a different backend
+        or account than the parent). ``None`` uses the Runner's provider.
         """
-        return self._run_streamed(agent, user_input, session_id=session_id, concurrent=concurrent)
+        return self._run_streamed(
+            agent, user_input, session_id=session_id, concurrent=concurrent, provider=provider
+        )
 
     def resume_streamed(
         self,
@@ -140,7 +146,9 @@ class Runner:
         session_id: str | None,
         resume_state: RunState | None = None,
         concurrent: bool = False,
+        provider: LLMProvider | None = None,
     ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
+        stream_provider = provider or self._provider
         await self._hooks.emit(self._hooks.on_run_start, agent)
         if resume_state is not None:
             messages = list(resume_state.messages)
@@ -163,8 +171,9 @@ class Runner:
             response = None
             # agent.model (if set) overrides the provider's configured model
             # for this run — the per-agent model tiering seam. Empty string
-            # means "inherit the provider default".
-            async for event in self._provider.stream(
+            # means "inherit the provider default". ``stream_provider`` is the
+            # Runner's provider or the per-run override (subagent accounts).
+            async for event in stream_provider.stream(
                 messages, tools=tool_schemas, model=agent.model or None
             ):
                 if isinstance(event, StreamEnd):

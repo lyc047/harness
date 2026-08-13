@@ -557,6 +557,36 @@ async def test_runtime_subagents_enabled_by_setting(make_provider, tmp_path) -> 
     await store.close()
 
 
+async def test_runtime_subagent_provider_keyed_by_env(make_provider, tmp_path) -> None:
+    """HARNESS_SUBAGENT_API_KEY builds a separate subagent account on the stack
+    (own key/base_url/model); unset, subagents share the parent's provider."""
+    rt, store = await _make_runtime(
+        tmp_path,
+        make_provider,
+        [LLMResponse(final_text="x")],
+        HARNESS_SUBAGENTS="1",
+        HARNESS_SUBAGENT_API_KEY="sk-sub",
+        HARNESS_SUBAGENT_BASE_URL="https://sub.example.com/v1",
+        HARNESS_SUBAGENT_MODEL="deepseek-v4-flash",
+    )
+    sub = rt.stack.subagent_provider
+    assert sub is not None
+    assert sub._api_key == "sk-sub"  # type: ignore[attr-defined]
+    assert sub._base_url == "https://sub.example.com/v1"  # type: ignore[attr-defined]
+    assert sub.model == "deepseek-v4-flash"  # type: ignore[attr-defined]
+    # the parent keeps its own provider — distinct from the subagent account
+    assert rt.stack.provider is not sub
+    await rt.shutdown()
+    await store.close()
+
+    rt2, store2 = await _make_runtime(
+        tmp_path, make_provider, [LLMResponse(final_text="x")], HARNESS_SUBAGENTS="1"
+    )
+    assert rt2.stack.subagent_provider is None
+    await rt2.shutdown()
+    await store2.close()
+
+
 async def test_runtime_subagent_model_tiering(make_provider, tmp_path) -> None:
     """HARNESS_SUBAGENT_MODEL gives delegates a cheaper model tier; unset, they
     inherit the parent (settings.model)."""

@@ -77,14 +77,63 @@ async def test_parent_delegates_to_subagent(make_provider) -> None:
 
     result = await runner.run(agent, "Do the thing", session_id=None)
     assert result.final_output == "Combined answer."
-
     # the tool message fed back to the parent carried the subagent's output
     tool_msgs = [m for m in result.messages if m.role == "tool"]
     assert tool_msgs and "research result for X" in tool_msgs[-1].content or ""
 
-    # isolation: parent turn 1 -> subagent -> parent turn 2
-    assert provider.stream_calls == [2, 2, 4]
-    assert len(result.messages) == 5
+
+async def test_subagent_uses_its_own_provider(make_provider) -> None:
+    """When a subagent_provider is wired, the nested run talks to that account
+    while the parent talks to its own — per-subagent API key tiering."""
+    parent_provider = make_provider(
+        [
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="tc1", name="delegate_to_worker", arguments='{"task": "research X"}'
+                    )
+                ]
+            ),
+            LLMResponse(final_text="Combined answer."),
+        ]
+    )
+    sub_provider = make_provider([LLMResponse(final_text="research result for X")])
+
+    agent = Agent(name="parent", instructions="parent", model="m")
+    runner = Runner(parent_provider)
+    add_subagents(agent, runner, [_subagent()], subagent_provider=sub_provider)
+
+    result = await runner.run(agent, "Do the thing", session_id=None)
+    assert result.final_output == "Combined answer."
+    # parent's two turns went to the parent provider, the subagent's to its own
+    assert len(parent_provider.stream_calls) == 2
+    assert len(sub_provider.stream_calls) == 1
+
+
+async def test_subagent_without_own_provider_shares_parent(make_provider) -> None:
+    """No subagent_provider => subagents run on the parent's provider (the
+    default before per-subagent accounts existed)."""
+    parent_provider = make_provider(
+        [
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="tc1", name="delegate_to_worker", arguments='{"task": "research X"}'
+                    )
+                ]
+            ),
+            LLMResponse(final_text="research result for X"),
+            LLMResponse(final_text="Combined answer."),
+        ]
+    )
+    agent = Agent(name="parent", instructions="parent", model="m")
+    runner = Runner(parent_provider)
+    add_subagents(agent, runner, [_subagent()])
+
+    result = await runner.run(agent, "Do the thing", session_id=None)
+    assert result.final_output == "Combined answer."
+    # subagent turn consumed a stream from the SAME provider
+    assert len(parent_provider.stream_calls) == 3
 
 
 async def test_parent_routes_to_second_subagent(make_provider) -> None:

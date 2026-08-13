@@ -57,6 +57,8 @@ class Settings:
     # Multi-agent orchestration: register researcher/coder delegate tools
     subagents: bool = False
     subagent_model: str = ""  # cheaper model for subagents; empty => inherit parent
+    subagent_api_key: str = ""  # separate key for subagents; empty => inherit parent
+    subagent_base_url: str = ""  # separate base URL for subagents; empty => inherit parent
     subagent_advanced: bool = False  # advanced orchestration (nesting + concurrency)
     subagent_budget: int = 40  # per-run subagent turn budget (advanced-mode guardrail)
 
@@ -133,6 +135,8 @@ class Settings:
             permissions_file=get("HARNESS_PERMISSIONS_FILE", default="permissions.toml"),
             subagents=get_bool("HARNESS_SUBAGENTS", False),
             subagent_model=get("HARNESS_SUBAGENT_MODEL"),
+            subagent_api_key=get("HARNESS_SUBAGENT_API_KEY"),
+            subagent_base_url=get("HARNESS_SUBAGENT_BASE_URL"),
             subagent_advanced=get_bool("HARNESS_SUBAGENT_ADVANCED", False),
             subagent_budget=get_int("HARNESS_SUBAGENT_BUDGET", 40),
             web_search_backend=get("HARNESS_WEB_SEARCH_BACKEND", default="bing"),

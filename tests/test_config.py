@@ -38,6 +38,21 @@ def test_subagent_model_env():
     assert Settings.from_env({}).subagent_model == ""
 
 
+def test_subagent_api_key_env():
+    s = Settings.from_env(
+        {
+            "HARNESS_SUBAGENT_API_KEY": "sk-sub",
+            "HARNESS_SUBAGENT_BASE_URL": "https://gateway.example.com/v1",
+        }
+    )
+    assert s.subagent_api_key == "sk-sub"
+    assert s.subagent_base_url == "https://gateway.example.com/v1"
+    # unset => subagents inherit the parent's key / base_url
+    d = Settings.from_env({})
+    assert d.subagent_api_key == ""
+    assert d.subagent_base_url == ""
+
+
 def test_replace_returns_new_instance():
     s = Settings.from_env({})
     s2 = s.replace(model="other-model")

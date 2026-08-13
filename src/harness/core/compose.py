@@ -72,6 +72,9 @@ def add_example_subagents(
     ``advanced`` turns on nested delegation: each subagent gains delegate tools
     for the others (depth-2), runs its own turns concurrently, and shares the
     stack's per-run turn budget.
+    Subagents talk to ``stack.subagent_provider`` when the settings carry a
+    separate ``HARNESS_SUBAGENT_API_KEY`` — their own account — and otherwise
+    share the parent's provider, differing only by model.
     """
     from harness.agents.examples import example_subagents
     from harness.agents.orchestrator import add_subagents, attach_delegation_protocol
@@ -85,6 +88,7 @@ def add_example_subagents(
         concurrent=advanced,
         budget=stack.subagent_budget if advanced else None,
         advanced=advanced,
+        subagent_provider=stack.subagent_provider,
     )
     # Tell the parent to write self-contained delegation briefs, so isolated
     # subagents (which can't see the conversation) get the context they need.
@@ -117,6 +121,7 @@ class CoreStack:
     runner: Runner
     planner: Planner
     subagent_budget: SubagentBudget
+    subagent_provider: LLMProvider | None = None  # own key/base_url for subagents
 
 
 async def build_core_stack(
@@ -144,6 +149,18 @@ async def build_core_stack(
         await store.initialize()
 
     provider = provider or get_provider(settings)
+    # A separate subagent account (HARNESS_SUBAGENT_API_KEY): subagents run
+    # against their own key/base_url/model instead of the parent's. Absent a
+    # key they share the parent's provider and only differ by model.
+    subagent_provider: LLMProvider | None = None
+    if settings.subagent_api_key:
+        subagent_provider = get_provider(
+            settings.replace(
+                api_key=settings.subagent_api_key,
+                base_url=settings.subagent_base_url or settings.base_url,
+                model=settings.subagent_model or settings.model,
+            )
+        )
     agent = default_agent(settings)
 
     # Self-evolving skills + user preferences: expose the tools and inject any
@@ -197,4 +214,5 @@ async def build_core_stack(
         runner=runner,
         planner=planner,
         subagent_budget=SubagentBudget(settings.subagent_budget),
+        subagent_provider=subagent_provider,
     )
