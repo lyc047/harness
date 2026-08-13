@@ -108,6 +108,11 @@ PRICING: dict[str, dict[str, float]] = {
 }
 SUBAGENT_MODEL = "deepseek-v4-flash"
 SUBAGENT_BUDGET = int(os.environ.get("HARNESS_SUBAGENT_BUDGET", "120"))
+# Gate-driven repair (#1): max fix-subagent rounds after a run that fails the
+# verify gate / robustness audit. 0 (default) keeps the v2 benchmark behavior
+# byte-for-byte identical — repair only activates when set explicitly via
+# HARNESS_COMPARE_REPAIR.
+REPAIR_MAX = int(os.environ.get("HARNESS_COMPARE_REPAIR", "0"))
 
 
 # ---- pure helpers (imported by tests) ---- #
@@ -163,6 +168,95 @@ def _fmt_stats(vals: list[float]) -> str:
     return f"{m:.1f} ({med:.1f}) [{min(vals):.1f}–{max(vals):.1f}] ±{sd:.1f}"
 
 
+# ---- gate-driven repair helpers (#1) ---- #
+
+
+# Verify gate name -> the file(s) that gate exercises. The repair brief points
+# the fix subagent at exactly these paths instead of the whole out dir.
+GATE_FILE = {
+    "engine": "engine.py",
+    "storage": "storage.py",
+    "api": "api.py",
+    "static": "static/",
+    "readme": "README.md",
+}
+# Gate -> the subagent best equipped to fix it; everything else falls to coder.
+# (engine/storage/api are code, so coder is the default.)
+GATE_SUBAGENT = {"static": "frontend_design", "readme": "doc_writer"}
+# Robustness probe -> the behavior the fix must produce. All probes hammer
+# api.py, so a robust failure always dispatches coder.
+ROBUST_EXPECT = {
+    "huge_duration": "POST /api/sessions with duration_s=10**15 must return 400",
+    "huge_id": "GET /api/sessions/99999999999999999999 must return 400, never 500 "
+               "(reject out-of-range ids before int())",
+    "patch_huge_id": "PATCH /api/sessions/99999999999999999999 must return 400, never 500",
+    "delete_huge_id": "DELETE /api/sessions/99999999999999999999 must return 400, never 500",
+    "deep_nested": "POST with a deeply nested body must not 500 (RecursionError)",
+    "after_alive": "server must still answer GET /api/sessions after hostile input",
+}
+
+
+def _parse_fail(line: str) -> tuple[str, str] | None:
+    """Parse a verify FAIL line into (gate name, message).
+
+    ``"FAIL engine: AssertionError: bad state"`` -> ``("engine",
+    "AssertionError: bad state")``. Returns None for non-FAIL lines so a
+    caller can filter a noisy stdout safely.
+    """
+    if not line.strip().startswith("FAIL "):
+        return None
+    name, _, msg = line.strip()[len("FAIL "):].partition(":")
+    return name.strip(), msg.strip()
+
+
+def _robust_failures(rob: dict) -> list[str]:
+    """Failed robustness probes -> human-readable fix requirements."""
+    out = []
+    for probe, ok in (rob.get("robust") or {}).items():
+        if not ok:
+            out.append(f"robustness probe '{probe}': {ROBUST_EXPECT.get(probe, probe)}")
+    return out
+
+
+def _build_repair_brief(out: Path, fail_lines: list[str], rob: dict) -> tuple[str, list[str]]:
+    """Failed gates + probes -> (repair brief, subagents to dispatch).
+
+    Robustness failures always target api.py -> coder; each verify FAIL line
+    maps through ``GATE_FILE``/``GATE_SUBAGENT``. An empty subagent list means
+    nothing dispatchable (e.g. all fail lines unparseable) — the caller should
+    stop repairing.
+    """
+    items: list[tuple[str, str]] = []
+    subs: set[str] = set()
+    for line in fail_lines:
+        parsed = _parse_fail(line)
+        if parsed is None:
+            continue
+        gate, msg = parsed
+        f = GATE_FILE.get(gate, gate)
+        subs.add(GATE_SUBAGENT.get(gate, "coder"))
+        items.append((f"{out}/{f}", f"gate '{gate}' failed: {msg}"))
+    for rline in _robust_failures(rob):
+        subs.add("coder")
+        items.append((f"{out}/api.py", rline))
+    if not items:
+        return "", []
+    joined = "\n".join(f"- {path}: {reason}" for path, reason in items)
+    brief = (
+        f"A verification gate failed on the implementation in {out}. Fix the code so "
+        "all gates pass.\n\nFailures:\n" + joined + "\n\n"
+        f"The gate is at {out}/verify_impl.py — read it to see exactly what each gate "
+        f"asserts, then after each change run `uv run python {out}/verify_impl.py` and "
+        "iterate until it prints VERIFY_PASS 5/5. Keep the tests green too: "
+        f"`uv run pytest -q {out}`.\n\n"
+        "Rules: standard library only (no third-party imports); do not delete files; "
+        "do not modify verify_impl.py; do not change the public class/function "
+        "signatures — fix the implementation, not the interface.\n\n"
+        "When done, report which file(s) you changed and the final VERIFY_PASS line."
+    )
+    return brief, sorted(subs)
+
+
 # ---- run orchestration ---- #
 
 
@@ -195,6 +289,99 @@ def _build_providers(settings: Settings) -> tuple[OpenAICompatProvider, OpenAICo
     return pro, flash
 
 
+async def _dispatch_fix(
+    stack: Any, *, out: Path, brief: str, subs: list[str], advanced: bool
+) -> int:
+    """Dispatch one repair subagent; return the number dispatched successfully.
+
+    advanced mode reuses the live delegate tools (``delegate_to_<name>``) so a
+    fix counts against the run's subagent budget and model routing. normal mode
+    spawns a fresh pro repair agent — it has no subagents, so this is the only
+    repair path and the pro-token cost is exactly what the benchmark is trying
+    to measure. Degrades (logs, returns 0) on any failure rather than crashing
+    the benchmark.
+    """
+    dispatched = 0
+    if advanced:
+        for name in subs:
+            tool = stack.agent.tools.get(f"delegate_to_{name}")
+            if tool is None:
+                print(f"    repair: no delegate_to_{name} tool", flush=True)
+                continue
+            try:
+                await tool.invoke(
+                    task=brief,
+                    scope=str(out),
+                    expected_output="Report which file(s) changed and the final VERIFY_PASS line.",
+                )
+                dispatched += 1
+            except Exception as exc:  # noqa: BLE001 — degrade, keep the benchmark alive
+                print(
+                    f"    repair: delegate_to_{name} failed: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+    else:
+        from harness.core.agent import Agent
+        from harness.tools.builtin import builtin_registry
+
+        agent = Agent(
+            name="repair",
+            instructions=brief,
+            tools=builtin_registry(),
+            model=stack.agent.model,
+            max_turns=20,
+        )
+        try:
+            await stack.runner.run(agent, brief)
+            dispatched += 1
+        except Exception as exc:  # noqa: BLE001 — degrade, keep the benchmark alive
+            print(
+                f"    repair: normal-mode fix failed: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+    return dispatched
+
+
+async def _repair_loop(
+    stack: Any, out: Path, *, label: str, i: int, advanced: bool, max_rounds: int
+) -> tuple[int, list[str], int, dict, int, int]:
+    """Gate-driven repair: dispatch fix subagents until gates pass or progress stalls.
+
+    Re-runs the gate, pytest, and robustness audit after each round. Stops when
+    (verify, robust) both reach max, or when a round produces no improvement
+    over the previous one — a stall means the fix subagent can't see its own
+    problem, so more rounds just burn tokens. Returns the final
+    (verify_pass, fail_lines, pytest_passed, rob, rounds, dispatched_total).
+    """
+    verify_pass, fail_lines = _run_verify(out)
+    pytest_passed = _run_pytest(out)
+    rob = robust_score(label, i, out)
+    rounds = dispatched_total = 0
+    while rounds < max_rounds and not (verify_pass == 5 and rob.get("robust_pass") == 6):
+        brief, subs = _build_repair_brief(out, fail_lines, rob)
+        if not subs:
+            break
+        prev = (verify_pass, rob.get("robust_pass", 0))
+        print(
+            f"    repair round {rounds + 1}: {subs} (verify={verify_pass}/5 "
+            f"robust={rob.get('robust_pass', 0)}/6)",
+            flush=True,
+        )
+        dispatched_total += await _dispatch_fix(
+            stack, out=out, brief=brief, subs=subs, advanced=advanced
+        )
+        rounds += 1
+        verify_pass, fail_lines = _run_verify(out)
+        pytest_passed = _run_pytest(out)
+        rob = robust_score(label, i, out)
+        if (verify_pass, rob.get("robust_pass", 0)) == prev:
+            # No gate improvement — stop rather than spend budget on more
+            # rounds that fix nothing.
+            print("    repair: no gate improvement — stopping", flush=True)
+            break
+    return verify_pass, fail_lines, pytest_passed, rob, rounds, dispatched_total
+
+
 def _metrics(
     *,
     seconds: float,
@@ -205,6 +392,8 @@ def _metrics(
     verify_pass: int,
     pytest_passed: bool,
     robust_pass: int,
+    repair_rounds: int = 0,
+    repair_dispatches: int = 0,
 ) -> dict[str, Any]:
     """Aggregate usage records + quality gates into a run's metrics dict."""
     pro_u = sum_usage(pro_records)
@@ -224,6 +413,8 @@ def _metrics(
         "verify_pass": verify_pass,
         "pytest_passed": pytest_passed,
         "robust_pass": robust_pass,
+        "repair_rounds": repair_rounds,
+        "repair_dispatches": repair_dispatches,
     }
 
 
@@ -249,8 +440,12 @@ async def _run_once(
             advanced=True,
             subagent_model=settings.subagent_model or SUBAGENT_MODEL,
             on_event=_make_sink(agent_names),
+            subagent_router=settings.subagent_router,
         )
     prompt = _prompt_forced(str(out_dir)) if forced else _prompt(str(out_dir))
+    verify_pass = pytest_passed = 0
+    rob: dict = {"robust_pass": 0}
+    repair_rounds = repair_dispatches = 0
     try:
         # Self-contained timeout (#4): wait_for lives inside _run_once, so a
         # timeout cancels only the inner runner task. The finally below then
@@ -269,18 +464,33 @@ async def _run_once(
             reason = f"{type(exc).__name__}: {exc}"
         else:
             reason = "ok"
+        # Post-run gates + optional gate-driven repair (#1). Wrapped so a gate
+        # crash (e.g. robustness probe failing to import api.py) degrades the
+        # run instead of aborting the whole benchmark. store must stay open
+        # here — a repair subagent writes files through the SnapshotExecutor.
+        try:
+            verify_pass, _ = _run_verify(out_dir)
+            pytest_passed = _run_pytest(out_dir)
+            rob = robust_score(label, i, out_dir)
+            if REPAIR_MAX > 0:
+                (verify_pass, _fail_lines, pytest_passed, rob,
+                 repair_rounds, repair_dispatches) = await _repair_loop(
+                    stack, out_dir, label=label, i=i,
+                    advanced=advanced, max_rounds=REPAIR_MAX,
+                )
+        except Exception as exc:  # noqa: BLE001 — degrade, don't crash the benchmark
+            reason = f"{type(exc).__name__}: {exc} (post-run gates/repair)"
     finally:
         # Each run builds its own Store (SQLite over aiosqlite). Closing it here
         # — even on exception or cancellation — lets the non-daemon worker thread
         # exit, so the process doesn't linger after main() returns. Usage is
-        # snapshotted into `partial` so a salvaged run keeps its tokens.
+        # snapshotted into `partial` so a salvaged run keeps its tokens. Close
+        # lives in the OUTERMOST finally so a repair loop's write_file snapshots
+        # still land before the store goes away.
         await stack.store.close()
         partial["pro_usage"] = list(pro.usage_log)
         partial["flash_usage"] = list(flash.usage_log)
     seconds = time.monotonic() - started
-    verify_pass = _run_verify(out_dir)
-    pytest_passed = _run_pytest(out_dir)
-    rob = robust_score(label, i, out_dir)
     return {
         "mode": label,
         "run": i,
@@ -295,6 +505,8 @@ async def _run_once(
             verify_pass=verify_pass,
             pytest_passed=pytest_passed,
             robust_pass=rob.get("robust_pass", 0),
+            repair_rounds=repair_rounds,
+            repair_dispatches=repair_dispatches,
         ),
     }
 
@@ -313,7 +525,7 @@ def _salvage(
     ``partial`` carries the usage snapshots taken in ``_run_once``'s finally;
     non-empty records are merged in instead of hardcoding zero (#4).
     """
-    verify_pass = _run_verify(out_dir)
+    verify_pass, _ = _run_verify(out_dir)
     pytest_passed = _run_pytest(out_dir)
     rob = robust_score(label, i, out_dir)
     p = partial or {}
@@ -395,7 +607,8 @@ async def _run_all(settings: Settings, tmp: Path) -> int:
                 f"  ran {label}-{i}: {record['reason']} pro_tok={m['pro_tokens']} "
                 f"flash_tok={m['flash_tokens']} sub={m['subagent_runs']} "
                 f"verify={m['verify_pass']}/5 pytest={m['pytest_passed']} "
-                f"robust={m['robust_pass']}/6 cost=${m['cost_usd']} wall={m['seconds']:.1f}s",
+                f"robust={m['robust_pass']}/6 repair={m['repair_rounds']} "
+                f"cost=${m['cost_usd']} wall={m['seconds']:.1f}s",
                 flush=True,
             )
             runs.append(record)
@@ -421,6 +634,7 @@ async def _run_all(settings: Settings, tmp: Path) -> int:
             ("cost_usd", " $"),
             ("seconds", " s"),
             ("subagent_runs", ""),
+            ("repair_rounds", ""),
             ("verify_pass", "/5"),
             ("pytest_passed", ""),
             ("robust_pass", "/6"),

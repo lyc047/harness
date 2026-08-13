@@ -190,7 +190,7 @@ def _salvage_run(
     WS-derived metrics are unknown; verify/pytest are computed from whatever
     files exist so a slow-but-complete agent is not wasted.
     """
-    verify_pass = _run_verify(out_dir)
+    verify_pass, _fail_lines = _run_verify(out_dir)
     pytest_passed = _run_pytest(out_dir)
     print(
         f"  salvaged {label}-{i}: verify={verify_pass}/5 pytest={pytest_passed}",
@@ -230,8 +230,13 @@ def _prompt_forced(out: str) -> str:
     return "Perform the following task.\n\n" + SPRINT_TASK_FORCED.replace("{out}", out)
 
 
-def _run_verify(out_dir: Path) -> int:
-    """Copy the gate into {out} and run it; return verify_pass (0-5)."""
+def _run_verify(out_dir: Path) -> tuple[int, list[str]]:
+    """Copy the gate into {out} and run it; return (verify_pass 0-5, FAIL lines).
+
+    The FAIL lines carry the per-gate failure detail (``FAIL <gate>: <Type>:
+    <msg>``) so a repair loop can hand a focused traceback to the fix subagent
+    instead of only the aggregate count.
+    """
     (out_dir / "verify_impl.py").write_text(
         VERIFY_TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8"
     )
@@ -242,11 +247,15 @@ def _run_verify(out_dir: Path) -> int:
         )
     except subprocess.TimeoutExpired:
         print("    verify: TIMEOUT", flush=True)
-        return 0
+        return 0, ["FAIL <unknown>: TimeoutExpired: verify gate timed out (180s)"]
     for line in proc.stdout.splitlines():
         print("    " + line, flush=True)
     m = re.search(r"VERIFY_PASS (\d)/5", proc.stdout)
-    return int(m.group(1)) if m else 0
+    count = int(m.group(1)) if m else 0
+    fail_lines = [
+        ln for ln in proc.stdout.splitlines() if ln.strip().startswith("FAIL ")
+    ]
+    return count, fail_lines
 
 
 def _run_pytest(out_dir: Path) -> int:
@@ -375,7 +384,7 @@ async def _run_mode(port: int, out: str, *, prompt: str, advanced: bool) -> dict
             key=lambda p: (len(p), p),
         )
         out_dir = Path(out)
-        verify_pass = _run_verify(out_dir)
+        verify_pass, _fail_lines = _run_verify(out_dir)
         pytest_passed = _run_pytest(out_dir)
         return {
             "seconds": time.monotonic() - started,
