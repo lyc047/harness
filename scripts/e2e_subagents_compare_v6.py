@@ -111,22 +111,41 @@ You must produce these files, with these EXACT module contracts:
                                 201 + {"id": N}; 400 on malformed JSON or a
                                 missing/non-positive duration_s
     GET  /api/sessions/<id> -> 200 + session dict; 404 if missing
+    PATCH /api/sessions/<id> -> body {"note": str} (and/or {"duration_s": int});
+                                200 + updated dict; 404 if missing; 400 on
+                                malformed JSON / empty body / invalid fields
+    DELETE /api/sessions/<id> -> 204 (or 200) on success; 404 if missing
+    GET  /api/stats          -> 200 + {"total_sessions": int,
+                                "total_focus_seconds": int,
+                                "avg_duration_s": int, "today_count": int}
+  Validation on EVERY endpoint: reject non-int / negative / zero duration_s
+  with 400; reject ids that are not positive integers with 400; never return a
+  500 with a stack trace. /api/stats must be consistent with list(): total
+  total_sessions equals the number of sessions, avg_duration_s is non-negative
+  (rounded to int). The service must survive a restart — sessions created
+  before a restart must still be readable (storage persists to disk).
   Reject request bodies over 64 KB with 413 or 400 WITHOUT crashing the server.
-  Never return a 500 with a stack trace for malformed input.
 
 {out}/static/index.html, {out}/static/app.js, {out}/static/style.css
   A working Pomodoro timer page. index.html references style.css and app.js,
-  shows a timer display, and has Start / Pause / Reset <button> controls.
-  app.js defines functions startTimer, pauseTimer, resetTimer and calls
-  fetch("/api/sessions") (e.g. to POST a completed session). style.css has at
-  least 15 rules and is linked from index.html.
+  shows a live timer display (an element whose id or class contains "timer"),
+  and Start / Pause / Reset <button> controls that are ACTUALLY wired — via
+  onclick= or addEventListener — to functions startTimer / pauseTimer /
+  resetTimer in app.js. app.js fetches GET /api/sessions on load and renders
+  the history list, POSTs a completed session, offers a delete action that
+  calls DELETE /api/sessions/<id>, and displays GET /api/stats aggregates
+  (total sessions / total focus time). style.css has at least 15 rules and is
+  linked from index.html.
 
 {out}/test_engine.py, {out}/test_storage.py, {out}/test_api.py
-  Your own pytest tests for the three modules. They must pass with:
+  Your own pytest tests for the three modules (test_api should cover the new
+  PATCH / DELETE / stats endpoints, not just the basics). They must pass with:
   `uv run pytest -q {out}`
 
 {out}/README.md
-  Sections: Overview, Run, API, Tests. Include the command to start the server.
+  Sections: Overview, Run, API (a reference table listing every endpoint and
+  its status codes), Tests, Known limitations. Include the command to start
+  the server.
 
 Security requirements: no eval()/exec() anywhere; no hardcoded passwords,
 secrets, or API keys in any file.

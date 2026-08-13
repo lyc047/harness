@@ -11,7 +11,8 @@ Primary claim: forced-advanced uses far fewer PRO tokens/context than normal,
 with quality gates (verify 5/5, pytest, robustness) not degraded.
 
 Env:
-  HARNESS_COMPARE_RUNS      runs per group (default 3)
+  HARNESS_COMPARE_RUNS      runs per group (default 3); also accepts
+                            "normal=3,forced-advanced=5" for unequal counts
   HARNESS_COMPARE_GROUPS    comma-separated group labels (default
                             "normal,forced-advanced")
   HARNESS_COMPARE_TIMEOUT   per-run timeout seconds (default 1800)
@@ -26,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import statistics
 import sys
 import tempfile
 import time
@@ -53,11 +55,44 @@ from harness.core.compose import add_example_subagents, build_core_stack  # noqa
 from harness.core.messages import ToolCall  # noqa: E402
 from harness.llm.openai_compat import OpenAICompatProvider  # noqa: E402
 
-RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
+DEFAULT_RUNS = 3
 RUN_TIMEOUT = float(os.environ.get("HARNESS_COMPARE_TIMEOUT", "1800"))
 GROUPS_ALL = ("normal", "forced-advanced")
 _filter = [s for s in os.environ.get("HARNESS_COMPARE_GROUPS", "").split(",") if s]
 GROUPS = [g for g in GROUPS_ALL if not _filter or g in _filter]
+# Per-group run counts: "5" (every group) or "normal=3,forced-advanced=5".
+# Fixes the #7 sample-size complaint: advanced is the group that matters and
+# is cheap per run, so it can afford more samples than pro-only normal runs.
+
+
+def parse_runs(spec: str) -> dict[str, int]:
+    """Parse HARNESS_COMPARE_RUNS into per-group run counts.
+
+    ``"5"`` runs every group 5 times; ``"normal=3,forced-advanced=5"``
+    overrides per group. Unknown groups or a malformed entry raise
+    ``ValueError`` so a typo in the env fails loudly instead of silently
+    running the default.
+    """
+    spec = (spec or "").strip()
+    if not spec:
+        return {}
+    if "=" not in spec:
+        n = int(spec)  # raises ValueError on garbage
+        return {g: n for g in GROUPS_ALL}
+    out: dict[str, int] = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, sep, n = part.partition("=")
+        name, n = name.strip(), n.strip()
+        if not sep or name not in GROUPS_ALL:
+            raise ValueError(f"invalid HARNESS_COMPARE_RUNS entry: {part!r}")
+        out[name] = int(n)
+    return out
+
+
+RUNS_SPEC = parse_runs(os.environ.get("HARNESS_COMPARE_RUNS", str(DEFAULT_RUNS)))
 RESULTS_FILE = Path(
     os.environ.get(
         "HARNESS_TOKEN_ECON_RESULTS",
@@ -118,12 +153,14 @@ def pro_reduction(advanced_pro: list[float], normal_pro: list[float]) -> float |
     return 1 - adv / base
 
 
-def _spread(vals: list[float]) -> str:
-    """mean (min–max) string; 'n/a' when empty."""
+def _fmt_stats(vals: list[float]) -> str:
+    """mean (median) [min–max] ±std string (#7); 'n/a' when empty."""
     if not vals:
         return "n/a"
     m = sum(vals) / len(vals)
-    return f"{m:.1f} ({min(vals):.1f}–{max(vals):.1f})"
+    med = statistics.median(vals)
+    sd = statistics.stdev(vals) if len(vals) > 1 else 0.0
+    return f"{m:.1f} ({med:.1f}) [{min(vals):.1f}–{max(vals):.1f}] ±{sd:.1f}"
 
 
 # ---- run orchestration ---- #
@@ -158,6 +195,38 @@ def _build_providers(settings: Settings) -> tuple[OpenAICompatProvider, OpenAICo
     return pro, flash
 
 
+def _metrics(
+    *,
+    seconds: float,
+    pro_records: list[dict[str, Any]],
+    flash_records: list[dict[str, Any]],
+    subagent_runs: int,
+    agents: list[str],
+    verify_pass: int,
+    pytest_passed: bool,
+    robust_pass: int,
+) -> dict[str, Any]:
+    """Aggregate usage records + quality gates into a run's metrics dict."""
+    pro_u = sum_usage(pro_records)
+    flash_u = sum_usage(flash_records)
+    return {
+        "seconds": seconds,
+        "subagent_runs": subagent_runs,
+        "agents": sorted(set(agents)),
+        "pro_input_tokens": pro_u["prompt"],
+        "pro_output_tokens": pro_u["completion"],
+        "pro_reasoning_tokens": pro_u["reasoning"],
+        "flash_input_tokens": flash_u["prompt"],
+        "flash_output_tokens": flash_u["completion"],
+        "pro_tokens": pro_u["total"],
+        "flash_tokens": flash_u["total"],
+        "cost_usd": round(cost(pro_records) + cost(flash_records), 6),
+        "verify_pass": verify_pass,
+        "pytest_passed": pytest_passed,
+        "robust_pass": robust_pass,
+    }
+
+
 async def _run_once(
     settings: Settings,
     out_dir: Path,
@@ -166,6 +235,7 @@ async def _run_once(
     i: int,
     forced: bool,
     advanced: bool,
+    partial: dict[str, Any],
 ) -> dict[str, Any]:
     pro, flash = _build_providers(settings)
     started = time.monotonic()
@@ -182,21 +252,32 @@ async def _run_once(
         )
     prompt = _prompt_forced(str(out_dir)) if forced else _prompt(str(out_dir))
     try:
+        # Self-contained timeout (#4): wait_for lives inside _run_once, so a
+        # timeout cancels only the inner runner task. The finally below then
+        # snapshots usage — a run that timed out after doing real work no
+        # longer records as zero-token. (Cancellation of _run_once itself —
+        # e.g. the outer fallback wait_for in _run_all — runs this finally
+        # too, which is the whole point: CancelledError is a BaseException
+        # that used to bypass the usage collection entirely.)
         try:
-            await stack.runner.run(stack.agent, prompt)
+            await asyncio.wait_for(
+                stack.runner.run(stack.agent, prompt), timeout=RUN_TIMEOUT
+            )
+        except TimeoutError:
+            reason = "timeout"
         except Exception as exc:  # noqa: BLE001 — degrade, don't crash the benchmark
             reason = f"{type(exc).__name__}: {exc}"
         else:
             reason = "ok"
     finally:
         # Each run builds its own Store (SQLite over aiosqlite). Closing it here
-        # — even on exception or asyncio.wait_for cancellation above — lets the
-        # non-daemon worker thread exit, so the process doesn't linger after
-        # main() returns.
+        # — even on exception or cancellation — lets the non-daemon worker thread
+        # exit, so the process doesn't linger after main() returns. Usage is
+        # snapshotted into `partial` so a salvaged run keeps its tokens.
         await stack.store.close()
+        partial["pro_usage"] = list(pro.usage_log)
+        partial["flash_usage"] = list(flash.usage_log)
     seconds = time.monotonic() - started
-    pro_u = sum_usage(pro.usage_log)
-    flash_u = sum_usage(flash.usage_log)
     verify_pass = _run_verify(out_dir)
     pytest_passed = _run_pytest(out_dir)
     rob = robust_score(label, i, out_dir)
@@ -205,50 +286,52 @@ async def _run_once(
         "run": i,
         "out": str(out_dir),
         "reason": reason,
-        "metrics": {
-            "seconds": seconds,
-            "subagent_runs": len(agent_names),
-            "agents": sorted(set(agent_names)),
-            "pro_input_tokens": pro_u["prompt"],
-            "pro_output_tokens": pro_u["completion"],
-            "pro_reasoning_tokens": pro_u["reasoning"],
-            "flash_input_tokens": flash_u["prompt"],
-            "flash_output_tokens": flash_u["completion"],
-            "pro_tokens": pro_u["total"],
-            "flash_tokens": flash_u["total"],
-            "cost_usd": round(cost(pro.usage_log) + cost(flash.usage_log), 6),
-            "verify_pass": verify_pass,
-            "pytest_passed": pytest_passed,
-            "robust_pass": rob.get("robust_pass", 0),
-        },
+        "metrics": _metrics(
+            seconds=seconds,
+            pro_records=partial["pro_usage"],
+            flash_records=partial["flash_usage"],
+            subagent_runs=len(agent_names),
+            agents=agent_names,
+            verify_pass=verify_pass,
+            pytest_passed=pytest_passed,
+            robust_pass=rob.get("robust_pass", 0),
+        ),
     }
 
 
-def _salvage(label: str, i: int, out_dir: Path, *, reason: str, seconds: float) -> dict[str, Any]:
-    """Record a run that ended without clean metrics (timeout / API failure)."""
+def _salvage(
+    label: str,
+    i: int,
+    out_dir: Path,
+    *,
+    reason: str,
+    seconds: float,
+    partial: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record a run that ended without clean metrics (timeout / API failure).
+
+    ``partial`` carries the usage snapshots taken in ``_run_once``'s finally;
+    non-empty records are merged in instead of hardcoding zero (#4).
+    """
     verify_pass = _run_verify(out_dir)
     pytest_passed = _run_pytest(out_dir)
+    rob = robust_score(label, i, out_dir)
+    p = partial or {}
     return {
         "mode": label,
         "run": i,
         "out": str(out_dir),
         "reason": reason,
-        "metrics": {
-            "seconds": seconds,
-            "subagent_runs": 0,
-            "agents": [],
-            "pro_input_tokens": 0,
-            "pro_output_tokens": 0,
-            "pro_reasoning_tokens": 0,
-            "flash_input_tokens": 0,
-            "flash_output_tokens": 0,
-            "pro_tokens": 0,
-            "flash_tokens": 0,
-            "cost_usd": 0.0,
-            "verify_pass": verify_pass,
-            "pytest_passed": pytest_passed,
-            "robust_pass": 0,
-        },
+        "metrics": _metrics(
+            seconds=seconds,
+            pro_records=p.get("pro_usage", []),
+            flash_records=p.get("flash_usage", []),
+            subagent_runs=0,
+            agents=[],
+            verify_pass=verify_pass,
+            pytest_passed=pytest_passed,
+            robust_pass=rob.get("robust_pass", 0),
+        ),
     }
 
 
@@ -283,27 +366,36 @@ async def _run_all(settings: Settings, tmp: Path) -> int:
     for label in GROUPS:
         advanced = label == "forced-advanced"
         forced = advanced  # both forced-* groups use the forced prompt
-        for i in range(1, RUNS + 1):
+        n_runs = RUNS_SPEC.get(label, DEFAULT_RUNS)  # #7: unequal per-group samples
+        for i in range(1, n_runs + 1):
             if (label, i) in done:
                 continue
             out_dir = tmp / f"{label}-{i}"
             out_dir.mkdir(parents=True, exist_ok=True)
+            partial: dict[str, Any] = {}
             try:
                 record = await asyncio.wait_for(
                     _run_once(
-                        settings, out_dir, label=label, i=i, forced=forced, advanced=advanced
+                        settings, out_dir, label=label, i=i, forced=forced,
+                        advanced=advanced, partial=partial,
                     ),
-                    timeout=RUN_TIMEOUT,
+                    timeout=RUN_TIMEOUT + 120,  # outer fallback; inner timeout does the work
                 )
             except TimeoutError:
-                print(f"  {label}-{i}: TIMEOUT after {RUN_TIMEOUT:.0f}s — salvaging", flush=True)
-                record = _salvage(label, i, out_dir, reason="timeout", seconds=RUN_TIMEOUT)
+                print(
+                    f"  {label}-{i}: TIMEOUT after {RUN_TIMEOUT + 120:.0f}s — salvaging",
+                    flush=True,
+                )
+                record = _salvage(
+                    label, i, out_dir,
+                    reason="timeout", seconds=RUN_TIMEOUT + 120, partial=partial,
+                )
             m = record["metrics"]
             print(
                 f"  ran {label}-{i}: {record['reason']} pro_tok={m['pro_tokens']} "
                 f"flash_tok={m['flash_tokens']} sub={m['subagent_runs']} "
                 f"verify={m['verify_pass']}/5 pytest={m['pytest_passed']} "
-                f"robust={m['robust_pass']}/4 cost=${m['cost_usd']} wall={m['seconds']:.1f}s",
+                f"robust={m['robust_pass']}/6 cost=${m['cost_usd']} wall={m['seconds']:.1f}s",
                 flush=True,
             )
             runs.append(record)
@@ -331,9 +423,9 @@ async def _run_all(settings: Settings, tmp: Path) -> int:
             ("subagent_runs", ""),
             ("verify_pass", "/5"),
             ("pytest_passed", ""),
-            ("robust_pass", "/4"),
+            ("robust_pass", "/6"),
         ):
-            print(f"      {key:18s} {_spread([float(m[key]) for m in ms])}{unit}")
+            print(f"      {key:18s} {_fmt_stats([float(m[key]) for m in ms])}{unit}")
 
     # Reduction compares clean runs only (reason == "ok"); a salvaged timeout
     # records pro_tokens=0, which would masquerade as a huge saving.

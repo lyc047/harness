@@ -59,6 +59,7 @@ def add_example_subagents(
     subagent_model: str = "",
     on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
     advanced: bool = False,
+    subagent_fallback_model: str = "",
 ) -> None:
     """Register the built-in researcher/coder subagents as delegate tools.
 
@@ -67,6 +68,9 @@ def add_example_subagents(
     Lazy imports keep the ``agents`` package out of the hot composition path.
     ``subagent_model`` is the cheaper model subagents inherit when set
     (``HARNESS_SUBAGENT_MODEL``); empty means they use the parent's model.
+    ``subagent_fallback_model`` is the escalation target (a stronger model)
+    used when a subagent's first attempt errors
+    (``HARNESS_SUBAGENT_FALLBACK_MODEL``); empty disables escalation.
     ``on_event`` (if given) is forwarded the events of each nested subagent run
     so a caller can render the subagent's turns/tools (web run view).
     ``advanced`` turns on nested delegation: each subagent gains delegate tools
@@ -89,6 +93,7 @@ def add_example_subagents(
         budget=stack.subagent_budget if advanced else None,
         advanced=advanced,
         subagent_provider=stack.subagent_provider,
+        fallback_model=subagent_fallback_model,
     )
     # Tell the parent to write self-contained delegation briefs, so isolated
     # subagents (which can't see the conversation) get the context they need.

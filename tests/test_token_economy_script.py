@@ -9,7 +9,9 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from e2e_token_economy import (  # noqa: E402
+    _fmt_stats,
     cost,
+    parse_runs,
     pro_reduction,
     sum_usage,
 )
@@ -49,3 +51,41 @@ def test_pro_reduction_pct():
     assert pro_reduction([], [1000]) == 1.0  # advanced burned nothing
     assert pro_reduction([100], []) is None
     assert pro_reduction([100], [0, 0]) is None  # normal base zero -> undefined
+
+
+def test_parse_runs_flat_int_applies_to_all_groups():
+    assert parse_runs("5") == {"normal": 5, "forced-advanced": 5}
+    assert parse_runs("3") == {"normal": 3, "forced-advanced": 3}
+
+
+def test_parse_runs_unequal_per_group():
+    spec = "normal=3,forced-advanced=5"
+    assert parse_runs(spec) == {"normal": 3, "forced-advanced": 5}
+
+
+def test_parse_runs_partial_group_spec():
+    # A group missing from the spec falls back to DEFAULT_RUNS at the call site.
+    assert parse_runs("forced-advanced=5") == {"forced-advanced": 5}
+
+
+def test_parse_runs_blank_is_empty():
+    assert parse_runs("") == {}
+    assert parse_runs(None) == {}
+
+
+def test_parse_runs_rejects_bad_input():
+    for bad in ("bogus=3", "normal=abc", "normal", "normal=2, =3", "3=3"):
+        with pytest.raises(ValueError):
+            parse_runs(bad)
+
+
+def test_fmt_stats_mean_median_spread():
+    assert _fmt_stats([10.0, 20.0, 30.0]) == "20.0 (20.0) [10.0–30.0] ±10.0"
+
+
+def test_fmt_stats_single_value_no_std():
+    assert _fmt_stats([7.0]) == "7.0 (7.0) [7.0–7.0] ±0.0"
+
+
+def test_fmt_stats_empty():
+    assert _fmt_stats([]) == "n/a"

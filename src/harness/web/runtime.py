@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from harness.agents.orchestrator import SubagentRunEnd, SubagentRunStart
+from harness.agents.orchestrator import SubagentEscalated, SubagentRunEnd, SubagentRunStart
 from harness.config import Settings
 from harness.core.compose import CoreStack, add_example_subagents, build_core_stack
 from harness.core.messages import Message, ToolCall
@@ -174,6 +174,7 @@ class Runtime:
             subagent_model=self._settings.subagent_model,
             on_event=self._forward_subagent_event,
             advanced=self._advanced,
+            subagent_fallback_model=self._settings.subagent_fallback_model,
         )
 
     def _rebuild_subagents(self) -> None:
@@ -222,6 +223,16 @@ class Runtime:
                     "output": event.output,
                     "turns": event.turns,
                     "is_error": event.is_error,
+                }
+            )
+        elif isinstance(event, SubagentEscalated):
+            await self._emit(
+                {
+                    "type": "subagent_escalated",
+                    "run_id": run_id,
+                    "agent": agent,
+                    "model": event.model,
+                    "reason": event.reason,
                 }
             )
         else:

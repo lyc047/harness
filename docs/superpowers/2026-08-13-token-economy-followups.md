@@ -6,6 +6,25 @@
 > #6 flash 无升级到 pro 路径、#7 基准样本小**。与结果文档 §7 局限对应：
 > [2026-08-13-token-economy-bench-results.md](2026-08-13-token-economy-bench-results.md)。
 
+> **状态（2026-08-13）：四项全部实现并过质量门（ruff/mypy/pytest 全绿，门禁自测 好实现 5/5 / 凑词 <5）。**
+> 真实 API 基准重跑、专家审阅与 v2 结果文档**推迟**到后续跑实验时执行（见文末「完成记录」）。
+
+---
+
+## 完成记录（2026-08-13）
+
+| # | 落地 | 验证 |
+|---|---|---|
+| **#4** | `_run_once` 自持 `asyncio.wait_for`（超时移进内部，CancelledError 也走 `finally`）；usage 快照进 `partial`；`_salvage` 合并非零 usage、并跑 `robust_score`（不再硬编码 0）；`_run_all` 外层兜底 `RUN_TIMEOUT+120` | `test_token_economy_script.py` 13 passed；模块可导入 |
+| **#5** | storage 门加 SQL 注入 round-trip；api 门加 PATCH/DELETE/stats 行为断言；static 门改 `id/class` 元素正则 + 事件绑定 + `fetch(/api/sessions|/api/stats)`；readme 门要求每小节非空（首 header 为文档标题，跳过） | 门禁自测：好实现 **5/5**、凑词实现 **1/5**（storage/static/readme 均被新行为门拦下） |
+| **#6** | `SubagentTool.fallback_model` + `_invoke_attempt` 重构 + `SubagentEscalated` 事件；config `subagent_fallback_model`（env `HARNESS_SUBAGENT_FALLBACK_MODEL`）；compose/CLI/web/REST 全接线。基准默认关闭（env 未设） | `test_subagent_escalates_to_fallback_model` + `test_subagent_no_escalation_without_fallback` + config env 测试通过 |
+| **#7** | `parse_runs()` 支持 `normal=3,forced-advanced=5` 分组不等；`_fmt_stats` 汇总加中位数/标准差；`robust_pass` 打印 `/6` | `parse_runs`/`_fmt_stats` 单测通过 |
+
+**附带**：`SPRINT_TASK` 更复杂化（PATCH/DELETE `/api/sessions/<id>`、`GET /api/stats`、重启持久化、前端实时计时+历史+统计、全端点校验）；`score_robustness` 探针 4→6（`patch_huge_id`/`delete_huge_id`）。
+**门误杀修复**：readme 门最初误杀「标题后跟空行再 `## Overview`」的合法结构，门内跳过首个 header（文档标题）解决。
+
+**推迟（后续跑实验时执行）**：真实 API 基准重跑（`HARNESS_COMPARE_RUNS=normal=3,forced-advanced=5`）、专家审阅（5 维 rubric 严格评分，避免满分）、`2026-08-13-token-economy-v2-results.md`。
+
 ---
 
 ## #4 失败轮丢弃累积数据

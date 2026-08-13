@@ -76,3 +76,10 @@ def test_subagent_advanced_and_budget_env():
 def test_subagent_budget_bad_value_falls_back():
     s = Settings.from_env({"HARNESS_SUBAGENT_BUDGET": "abc"})
     assert s.subagent_budget == 40
+
+
+def test_subagent_fallback_model_env():
+    s = Settings.from_env({"HARNESS_SUBAGENT_FALLBACK_MODEL": "deepseek-v4-pro"})
+    assert s.subagent_fallback_model == "deepseek-v4-pro"
+    # unset => escalation off
+    assert Settings.from_env({}).subagent_fallback_model == ""

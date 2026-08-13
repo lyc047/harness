@@ -61,6 +61,7 @@ class Settings:
     subagent_base_url: str = ""  # separate base URL for subagents; empty => inherit parent
     subagent_advanced: bool = False  # advanced orchestration (nesting + concurrency)
     subagent_budget: int = 40  # per-run subagent turn budget (advanced-mode guardrail)
+    subagent_fallback_model: str = ""  # escalation model on subagent error; empty => off
 
     # Web search backend for the web_search tool
     web_search_backend: str = "bing"  # bing (free, cn default) | duckduckgo | tavily-on-key
@@ -139,6 +140,7 @@ class Settings:
             subagent_base_url=get("HARNESS_SUBAGENT_BASE_URL"),
             subagent_advanced=get_bool("HARNESS_SUBAGENT_ADVANCED", False),
             subagent_budget=get_int("HARNESS_SUBAGENT_BUDGET", 40),
+            subagent_fallback_model=get("HARNESS_SUBAGENT_FALLBACK_MODEL"),
             web_search_backend=get("HARNESS_WEB_SEARCH_BACKEND", default="bing"),
             tavily_api_key=get("TAVILY_API_KEY"),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),

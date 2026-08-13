@@ -13,6 +13,7 @@ Exit code: 0 iff all 5 gates pass.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import threading
 import time
@@ -181,8 +182,18 @@ def _gate_storage() -> None:
         t.join(timeout=30)
     assert not errors, f"storage concurrency raised: {errors[:3]}"
     assert len(conc.list()) == 800, f"expected 800 rows, got {len(conc.list())}"
-    _rm(db)
     _rm(cdb)
+    # Behavioral injection test: a note containing SQL must round-trip as a
+    # literal. This is the real proof of `?` binding — the substring sniff
+    # below can be padded with a decorative placeholder.
+    injection = "x'; DROP TABLE sessions; --"
+    inj_id = store.create(duration_s=25, started_at=0.0, note=injection)
+    inj_got = store.get(inj_id)
+    assert inj_got is not None and inj_got["note"] == injection, (
+        f"injection note mutated by interpolation: {inj_got!r}"
+    )
+    assert any(s["id"] == sid for s in store.list()), "rows lost to injection"
+    _rm(db)
     # security sniff folded into the storage gate
     _assert_parameterized_sql()
     _assert_no_hardcoded_secrets()
@@ -240,6 +251,34 @@ def _gate_api() -> None:
         status, payload = request("GET", "/api/sessions")
         assert status == 200, f"GET list -> {status}"
         assert any(s["id"] == sid for s in json.loads(payload)), "list lacks created id"
+        # PATCH: valid update, 404 missing, 400 malformed
+        body = json.dumps({"note": "renamed"}).encode()
+        status, payload = request("PATCH", f"/api/sessions/{sid}", body)
+        assert status == 200, f"PATCH valid -> {status}"
+        assert json.loads(payload).get("note") == "renamed", f"PATCH body={payload!r}"
+        status, _ = request("PATCH", "/api/sessions/999999", body)
+        assert status == 404, f"PATCH missing id -> {status}"
+        status, _ = request("PATCH", f"/api/sessions/{sid}", b"not-json")
+        assert status == 400, f"PATCH malformed -> {status}"
+        # DELETE: existing removed, missing -> 404
+        status, _ = request("DELETE", f"/api/sessions/{sid}")
+        assert status in (204, 200), f"DELETE valid -> {status}"
+        status, _ = request("GET", f"/api/sessions/{sid}")
+        assert status == 404, f"GET after DELETE -> {status}"
+        status, _ = request("DELETE", f"/api/sessions/{sid}")
+        assert status == 404, f"DELETE missing -> {status}"
+        # stats: consistent with the store (2 fresh rows -> total_sessions 2)
+        for _ in range(2):
+            status, _ = request(
+                "POST", "/api/sessions", json.dumps({"duration_s": 1500, "note": "s"}).encode()
+            )
+            assert status == 201, f"POST for stats -> {status}"
+        status, payload = request("GET", "/api/stats")
+        assert status == 200, f"GET /api/stats -> {status}"
+        st = json.loads(payload)
+        assert st.get("total_sessions") == 2, f"stats total_sessions={st!r}"
+        assert st.get("avg_duration_s", -1) >= 0, f"stats avg negative: {st!r}"
+        assert st.get("total_focus_seconds", 0) >= 3000, f"stats focus seconds: {st!r}"
         # oversized body: 70 KB > 64 KB limit; server must survive
         big = json.dumps({"duration_s": 25, "note": "x" * 70_000}).encode()
         status, _ = request("POST", "/api/sessions", big)
@@ -261,20 +300,48 @@ def _gate_static() -> None:
     js = (OUT / "static" / "app.js").read_text(encoding="utf-8")
     css = (OUT / "static" / "style.css").read_text(encoding="utf-8")
     assert "style.css" in idx and "app.js" in idx, "index.html lacks style.css/app.js refs"
-    assert "timer" in idx.lower(), "index.html has no timer element"
-    assert "<button" in idx.lower(), "index.html has no <button> controls"
+    low_idx = idx.lower()
+    # a real timer element: an id/class containing "timer" — the old bare-word
+    # substring check ("timer" in idx) passed on prose alone.
+    assert re.search(r'id="[^"]*timer[^"]*"|class="[^"]*timer[^"]*"', low_idx), (
+        "index.html has no element with a timer id/class"
+    )
+    assert re.search(r"<button", low_idx), "index.html has no <button> controls"
     for fn in ("startTimer", "pauseTimer", "resetTimer"):
         assert fn in js, f"app.js missing {fn}"
-    assert "fetch" in js and "/api/sessions" in js, "app.js does not fetch /api/sessions"
+    low_js = js.lower()
+    # buttons must be WIRED, not merely defined — a stub can define the three
+    # functions and never bind them; that used to pass.
+    assert "addeventlistener" in low_js or "onclick" in low_js, (
+        "app.js wires no button clicks (no addEventListener / onclick)"
+    )
+    assert re.search(r"['\"]/api/sessions['\"]", js), "app.js does not fetch /api/sessions"
+    assert re.search(r"['\"]/api/stats['\"]", js), "app.js does not fetch /api/stats"
     assert css.count("{") >= 15, f"style.css has {css.count('{')} rules"
 
 
 @gate("readme")
 def _gate_readme() -> None:
-    text = (OUT / "README.md").read_text(encoding="utf-8")
-    for sec in ("Overview", "Run", "API", "Tests"):
-        assert sec in text, f"README missing section {sec!r}"
-    assert any("python" in line for line in text.splitlines()), "README has no run command line"
+    lines = (OUT / "README.md").read_text(encoding="utf-8").splitlines()
+    headers = [i for i, ln in enumerate(lines) if re.match(r"^#+\s+", ln)]
+    # every section must contain at least one non-whitespace content line —
+    # an empty "## Overview" used to pass the bare substring check. The first
+    # header is the document title (commonly followed straight by a section
+    # heading), so its "body" is not a section and is skipped.
+    for idx, pos in enumerate(headers):
+        if idx == 0:
+            continue
+        end = headers[idx + 1] if idx + 1 < len(headers) else len(lines)
+        body = "".join(lines[pos + 1 : end]).strip()
+        assert body, f"README section {lines[pos].strip()!r} is empty"
+    header_text = [re.sub(r"^#+\s+", "", lines[i]).strip().lower() for i in headers]
+    for sec in ("overview", "run", "api", "tests", "known limitations"):
+        assert any(re.search(rf"\b{re.escape(sec)}\b", h) for h in header_text), (
+            f"README missing section {sec!r}"
+        )
+    assert any("python" in ln.lower() or "uv" in ln.lower() for ln in lines), (
+        "README has no run command line"
+    )
 
 
 def main() -> int:

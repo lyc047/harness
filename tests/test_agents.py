@@ -582,3 +582,63 @@ async def test_subagent_budget_exhausted_returns_error(make_provider) -> None:
     assert denied.is_error
     assert "budget exhausted" in denied.content
     # nothing ran for the denied call
+
+
+async def test_subagent_escalates_to_fallback_model(make_provider) -> None:
+    """A subagent that errors (burns its turn budget) is re-dispatched once on
+    the fallback model; both attempts stream, and the escalation is surfaced as
+    a SubagentEscalated event."""
+    from harness.agents.orchestrator import SubagentEscalated, subagent_as_tool
+    from harness.agents.subagent import Subagent
+
+    script = [
+        # attempt 1 (flash, max_turns=1): a tool call burns the only turn
+        LLMResponse(tool_calls=[ToolCall(id="s1", name="some_tool", arguments="{}")]),
+        # attempt 2 (pro): succeeds
+        LLMResponse(final_text="escalated result"),
+    ]
+    provider = make_provider(script)
+    runner = Runner(provider)
+    events: list[object] = []
+
+    async def sink(run_id: str, agent: str, event: object) -> None:
+        events.append(event)
+
+    tool = subagent_as_tool(
+        Subagent(
+            name="worker", instructions="worker instructions",
+            description="Delegate work to worker.", max_turns=1,
+        ),
+        runner,
+        default_model="flash",
+        fallback_model="pro",
+        on_event=sink,
+    )
+    result = await tool.invoke(task="do it")
+    assert not result.is_error
+    assert "escalated result" in result.content
+    # first attempt on the cheap model, escalated attempt on the fallback
+    assert provider.models == ["flash", "pro"]
+    assert any(isinstance(e, SubagentEscalated) and e.model == "pro" for e in events)
+
+
+async def test_subagent_no_escalation_without_fallback(make_provider) -> None:
+    """Without fallback_model a failed attempt surfaces the error directly —
+    no second dispatch."""
+    from harness.agents.orchestrator import subagent_as_tool
+    from harness.agents.subagent import Subagent
+
+    provider = make_provider(
+        [LLMResponse(tool_calls=[ToolCall(id="s1", name="some_tool", arguments="{}")])]
+    )
+    tool = subagent_as_tool(
+        Subagent(
+            name="worker", instructions="worker instructions",
+            description="Delegate work to worker.", max_turns=1,
+        ),
+        Runner(provider),
+        default_model="flash",
+    )
+    result = await tool.invoke(task="do it")
+    assert result.is_error
+    assert provider.models == ["flash"]  # exactly one attempt, no escalation

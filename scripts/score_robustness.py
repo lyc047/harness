@@ -8,6 +8,8 @@ an ephemeral port, and fires hostile inputs at it:
   huge_id        GET  /api/sessions/99999999999999999999    -> 400 is robust
   deep_nested    POST with 5-deep nested payload            -> any 2xx/4xx ok;
                                                               500 = crash
+  patch_huge_id  PATCH /api/sessions/99999999999999999999   -> 400 is robust
+  delete_huge_id DELETE /api/sessions/99999999999999999999  -> 400 is robust
   after_alive    GET  /api/sessions (after the above)       -> 200 = survived
 
 Robust = graceful 4xx on absurd-but-parseable input; a 500 (uncaught crash)
@@ -69,6 +71,9 @@ res = {
     'huge_id': req('GET', '/api/sessions/99999999999999999999'),
     'deep_nested': req('POST', '/api/sessions',
                        json.dumps({'duration_s': 25, 'x': {'x': {'x': {'x': {'x': 1}}}}}).encode()),
+    'patch_huge_id': req('PATCH', '/api/sessions/99999999999999999999',
+                         json.dumps({'note': 'x'}).encode()),
+    'delete_huge_id': req('DELETE', '/api/sessions/99999999999999999999'),
     'after_alive': req('GET', '/api/sessions'),
 }
 server.shutdown()
@@ -101,6 +106,8 @@ def score(mode: str, run: int, out_dir: Path) -> dict:
         "deep_nested": (
             isinstance(res.get("deep_nested"), int) and 200 <= res["deep_nested"] < 500
         ),
+        "patch_huge_id": res.get("patch_huge_id") == 400,
+        "delete_huge_id": res.get("delete_huge_id") == 400,
         "after_alive": res.get("after_alive") == 200,
     }
     return {"codes": res, "robust": robust, "robust_pass": sum(robust.values())}
@@ -129,7 +136,7 @@ def main() -> int:
             )
             continue
         print(
-            f"  {rec['mode']}-{rec['run']}: {s['codes']}  robust={s['robust_pass']}/4",
+            f"  {rec['mode']}-{rec['run']}: {s['codes']}  robust={s['robust_pass']}/6",
             flush=True,
         )
         by_mode.setdefault(rec["mode"], []).append(
@@ -161,7 +168,7 @@ def main() -> int:
             if c and c.get("huge_duration") == 201
         ]
         print(
-            f"  {mode:15s} n={len(items)}  robust {min_}-{max_}/4  "
+            f"  {mode:15s} n={len(items)}  robust {min_}-{max_}/6  "
             f"fragile500(huge_id)={fragile or '-'}  accepts10^15={accepted or '-'}"
         )
     return 0

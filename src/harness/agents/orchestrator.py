@@ -167,12 +167,28 @@ class SubagentRunEnd:
     is_error: bool = False
 
 
+@dataclass
+class SubagentEscalated:
+    """Marker: a failed subagent run was re-dispatched on a stronger model.
+
+    Delivered to the ``on_event`` sink between the failed attempt and the
+    fallback attempt, so observers can render the flash→pro escalation.
+    """
+
+    model: str = ""
+    reason: str = ""
+
+
 class SubagentTool(Tool):
     """Runs a :class:`Subagent` in isolation and returns its final output.
 
     When ``on_event`` is set, the run streams through it (instead of being
     swallowed by ``Runner.run``): every event of the nested run is forwarded
     to the sink, bracketed by :class:`SubagentRunStart`/``SubagentRunEnd``.
+
+    When ``fallback_model`` is set and the first attempt errors (e.g. it burns
+    its turn budget), the same brief is re-dispatched once on that stronger
+    model, with :class:`SubagentEscalated` emitted between the two attempts.
     """
 
     def __init__(
@@ -191,6 +207,7 @@ class SubagentTool(Tool):
         nested_hint: str = "",
         advanced: bool = False,
         provider: LLMProvider | None = None,
+        fallback_model: str = "",
     ) -> None:
         super().__init__(
             name=name,
@@ -239,28 +256,28 @@ class SubagentTool(Tool):
         self._nested_hint = nested_hint
         self._advanced = advanced
         self._provider = provider  # per-subagent LLM account; None => parent's
+        self._fallback_model = fallback_model  # "" => no escalation
 
-    async def invoke(self, **kwargs: Any) -> ToolResult:
-        task = str(kwargs.get("task") or kwargs.get("prompt") or "").strip()
-        if not task:
-            return ToolResult.error("no task provided to subagent", agent=self.subagent.name)
-        # session_id=None => isolated history, nothing persisted. The subagent
-        # gets a single user message assembled from the structured fields.
-        brief = _compose_brief(
-            task,
-            scope=str(kwargs.get("scope") or "").strip(),
-            constraints=str(kwargs.get("constraints") or "").strip(),
-            expected_output=str(kwargs.get("expected_output") or "").strip(),
-        )
-        if self._advanced and self._budget is not None and self._budget.remaining() <= 0:
-            return ToolResult.error("subagent budget exhausted", agent=self.subagent.name)
-        mcp_tools = resolve_mcp_tools(self.subagent, self._parent_tools)
+    async def _invoke_attempt(
+        self,
+        *,
+        model: str,
+        brief: str,
+        mcp_tools: list[Tool],
+        run_id: str,
+    ) -> tuple[str, int, bool]:
+        """Run the subagent once on ``model``; returns (output, turns, is_error).
+
+        Bracket and stream the nested run through the ``on_event`` sink exactly
+        once, keyed by the given ``run_id`` (each attempt gets its own id so
+        the UI can render a failed attempt and its escalated re-run as
+        separate nested-run cards).
+        """
         agent = self.subagent.as_agent(
-            model=self._model,
+            model=model,
             extra_tools=tuple(self._nested_delegates) + tuple(mcp_tools),
             extra_instructions=self._nested_hint,
         )
-        run_id = uuid.uuid4().hex
         if self._on_event is not None:
             await self._on_event(run_id, self.subagent.name, SubagentRunStart())
         # Stream the nested run; when a sink is attached, forward every event
@@ -295,13 +312,55 @@ class SubagentTool(Tool):
             logger.warning("subagent %r raised %s: %s", self.subagent.name, type(exc).__name__, exc)
             output = f"{type(exc).__name__}: {exc}"
             is_error = True
-        if self._budget is not None:
-            self._budget.record(turns)
         if self._on_event is not None:
             await self._on_event(
                 run_id, self.subagent.name,
                 SubagentRunEnd(output=output, turns=turns, is_error=is_error),
             )
+        return output, turns, is_error
+
+    async def invoke(self, **kwargs: Any) -> ToolResult:
+        task = str(kwargs.get("task") or kwargs.get("prompt") or "").strip()
+        if not task:
+            return ToolResult.error("no task provided to subagent", agent=self.subagent.name)
+        # session_id=None => isolated history, nothing persisted. The subagent
+        # gets a single user message assembled from the structured fields.
+        brief = _compose_brief(
+            task,
+            scope=str(kwargs.get("scope") or "").strip(),
+            constraints=str(kwargs.get("constraints") or "").strip(),
+            expected_output=str(kwargs.get("expected_output") or "").strip(),
+        )
+        if self._advanced and self._budget is not None and self._budget.remaining() <= 0:
+            return ToolResult.error("subagent budget exhausted", agent=self.subagent.name)
+        mcp_tools = resolve_mcp_tools(self.subagent, self._parent_tools)
+        first_run_id = uuid.uuid4().hex
+        output, turns, is_error = await self._invoke_attempt(
+            model=self._model, brief=brief, mcp_tools=mcp_tools, run_id=first_run_id
+        )
+        if is_error and self._fallback_model and self._fallback_model != self._model:
+            # flash→pro escalation (#6): a failed cheap-model attempt is
+            # re-dispatched once on the stronger model before surfacing the
+            # error. Both attempts' turns count against the shared budget; the
+            # result is taken from the last attempt. Note this reuses the
+            # subagent's own provider (R3): it assumes the account serves both
+            # models — DeepSeek's single account does.
+            logger.warning(
+                "subagent %r failed on %s; escalating to %s",
+                self.subagent.name, self._model, self._fallback_model,
+            )
+            if self._on_event is not None:
+                await self._on_event(
+                    first_run_id, self.subagent.name,
+                    SubagentEscalated(model=self._fallback_model, reason=output[:400]),
+                )
+            output, fturns, is_error = await self._invoke_attempt(
+                model=self._fallback_model, brief=brief, mcp_tools=mcp_tools,
+                run_id=uuid.uuid4().hex,
+            )
+            turns += fturns
+        if self._budget is not None:
+            self._budget.record(turns)
         if is_error:
             return ToolResult.error(output, agent=self.subagent.name)
         logger.info("subagent %r completed in %d turns", self.subagent.name, turns)
@@ -321,11 +380,15 @@ def subagent_as_tool(
     nested_hint: str = "",
     advanced: bool = False,
     provider: LLMProvider | None = None,
+    fallback_model: str = "",
 ) -> Tool:
     """Wrap a Subagent as a Tool the parent agent can call.
 
     ``provider`` is the LLM account the subagent talks to (own key/base_url);
     ``None`` means it shares the parent's provider, differing only by model.
+    ``fallback_model`` is an explicit escalation target (a stronger model) used
+    when the subagent's first attempt errors — passed through verbatim, not
+    ``subagent.model or default_model``.
     """
     description = subagent.description or f"Delegate a subtask to the {subagent.name} subagent."
     return SubagentTool(
@@ -342,6 +405,7 @@ def subagent_as_tool(
         nested_hint=nested_hint,
         advanced=advanced,
         provider=provider,
+        fallback_model=fallback_model,
     )
 
 
@@ -356,6 +420,7 @@ def add_subagents(
     budget: SubagentBudget | None = None,
     advanced: bool = False,
     subagent_provider: LLMProvider | None = None,
+    fallback_model: str = "",
 ) -> None:
     """Register every subagent as a delegation tool on ``agent``.
 
@@ -366,6 +431,8 @@ def add_subagents(
     ``budget`` so nested runs share the per-run turn budget.
     ``subagent_provider`` (if given) is the separate LLM account all subagents
     use — their own API key / base URL, distinct from the parent's.
+    ``fallback_model`` (if given) is the escalation target every subagent uses
+    when its first attempt errors (see ``SubagentTool``).
     """
     base = default_model or agent.model
     if not advanced:
@@ -373,7 +440,7 @@ def add_subagents(
             agent.tools.register(
                 subagent_as_tool(
                     sa, runner, base, on_event=on_event, parent_tools=agent.tools,
-                    provider=subagent_provider,
+                    provider=subagent_provider, fallback_model=fallback_model,
                 )
             )
         return
@@ -382,6 +449,7 @@ def add_subagents(
             sa, runner, base,
             on_event=on_event, concurrent=True, budget=budget, advanced=True,
             parent_tools=agent.tools, provider=subagent_provider,
+            fallback_model=fallback_model,
         )
         for sa in subagents
     }
@@ -398,6 +466,7 @@ def add_subagents(
                 nested_hint=DELEGATION_HINT,
                 advanced=True,
                 provider=subagent_provider,
+                fallback_model=fallback_model,
             )
         )
 
