@@ -129,6 +129,7 @@ async def build_core_stack(
     *,
     store: Store | None = None,
     provider: LLMProvider | None = None,
+    subagent_provider: LLMProvider | None = None,
     tool_executor: ToolExecutor | None = None,
     prompt: ApprovalPrompt | None = None,
     on_pause: Callable[[], None] | None = None,
@@ -143,6 +144,9 @@ async def build_core_stack(
     the sandbox-wrapped default executor. ``prompt`` / ``on_pause`` /
     ``pause_check`` are per-surface: the CLI wires an interactive console
     prompt, the web wires a :class:`~harness.web.runtime.WebApprover`.
+    ``subagent_provider`` is a test/benchmark seam that injects the subagent
+    LLM account directly; when None the settings-derived one is built
+    (``HARNESS_SUBAGENT_API_KEY``), and with no key either way it stays None.
     """
     if store is None:
         store = Store(settings)
@@ -152,8 +156,7 @@ async def build_core_stack(
     # A separate subagent account (HARNESS_SUBAGENT_API_KEY): subagents run
     # against their own key/base_url/model instead of the parent's. Absent a
     # key they share the parent's provider and only differ by model.
-    subagent_provider: LLMProvider | None = None
-    if settings.subagent_api_key:
+    if subagent_provider is None and settings.subagent_api_key:
         subagent_provider = get_provider(
             settings.replace(
                 api_key=settings.subagent_api_key,
