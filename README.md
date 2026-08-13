@@ -134,6 +134,11 @@ deliverables saved to a file), which the parent verifies against the brief.
 - **Model tiering**: set `HARNESS_SUBAGENT_MODEL` to give delegates a cheaper
   tier (the provider now honors `agent.model` per request); a subagent's own
   `model:` field wins, unset inherits the parent.
+- **Per-subagent account**: set `HARNESS_SUBAGENT_API_KEY` (and optionally
+  `HARNESS_SUBAGENT_BASE_URL`) to run subagents against a *different* API
+  key/account than the main agent — e.g. main on a pro model, delegates on a
+  cheaper flash tier. Unset, they share the parent's key and differ only by
+  model.
 - **Web access**: subagents whose `tools:` allowlist includes `web_search` can
   fetch up-to-date external facts. The backend is pluggable —
   `HARNESS_WEB_SEARCH_BACKEND` picks the free Bing (default) or DuckDuckGo
