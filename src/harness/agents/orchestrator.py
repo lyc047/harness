@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from harness.agents.routing import RouterFn
 from harness.agents.subagent import Subagent
 from harness.core.agent import Agent
 from harness.core.run_result import MaxTurnsExceeded
@@ -208,6 +209,9 @@ class SubagentTool(Tool):
         advanced: bool = False,
         provider: LLMProvider | None = None,
         fallback_model: str = "",
+        contract: str = "",
+        check_contract: Callable[[str], str | None] | None = None,
+        router: RouterFn | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -257,6 +261,9 @@ class SubagentTool(Tool):
         self._advanced = advanced
         self._provider = provider  # per-subagent LLM account; None => parent's
         self._fallback_model = fallback_model  # "" => no escalation
+        self._contract = contract  # acceptance criteria appended to the brief (#3)
+        self._check_contract = check_contract  # "" => no machine enforcement (#3)
+        self._router = router  # task-type-aware model routing; None => default (#2)
 
     async def _invoke_attempt(
         self,
@@ -323,22 +330,45 @@ class SubagentTool(Tool):
         task = str(kwargs.get("task") or kwargs.get("prompt") or "").strip()
         if not task:
             return ToolResult.error("no task provided to subagent", agent=self.subagent.name)
+        scope = str(kwargs.get("scope") or "").strip()
         # session_id=None => isolated history, nothing persisted. The subagent
         # gets a single user message assembled from the structured fields.
         brief = _compose_brief(
             task,
-            scope=str(kwargs.get("scope") or "").strip(),
+            scope=scope,
             constraints=str(kwargs.get("constraints") or "").strip(),
             expected_output=str(kwargs.get("expected_output") or "").strip(),
         )
+        if self._contract:
+            # Explicit acceptance criteria (#3): spell out how the output will
+            # be judged so the subagent knows the bar before it starts.
+            brief = (
+                f"{brief}\n\nContract — your output is judged against these "
+                f"criteria:\n{self._contract}"
+            )
         if self._advanced and self._budget is not None and self._budget.remaining() <= 0:
             return ToolResult.error("subagent budget exhausted", agent=self.subagent.name)
         mcp_tools = resolve_mcp_tools(self.subagent, self._parent_tools)
+        # Task-type-aware routing (#2): the router may bump design/reasoning-heavy
+        # subtasks onto a stronger model for the first attempt; "" keeps the
+        # configured default. The fallback_model escalation below still guards a
+        # failed routed attempt.
+        routed = (
+            self._router(self.subagent.name, task, scope) if self._router is not None else ""
+        )
+        first_model = routed or self._model
         first_run_id = uuid.uuid4().hex
         output, turns, is_error = await self._invoke_attempt(
-            model=self._model, brief=brief, mcp_tools=mcp_tools, run_id=first_run_id
+            model=first_model, brief=brief, mcp_tools=mcp_tools, run_id=first_run_id
         )
-        if is_error and self._fallback_model and self._fallback_model != self._model:
+        if not is_error and self._check_contract is not None:
+            violation = self._check_contract(output)
+            if violation:
+                # Contract not met (#3): treat it like a failed attempt so the
+                # escalation path below can retry on the stronger model.
+                output = f"contract check failed: {violation}"
+                is_error = True
+        if is_error and self._fallback_model and self._fallback_model != first_model:
             # flash→pro escalation (#6): a failed cheap-model attempt is
             # re-dispatched once on the stronger model before surfacing the
             # error. Both attempts' turns count against the shared budget; the
@@ -347,7 +377,7 @@ class SubagentTool(Tool):
             # models — DeepSeek's single account does.
             logger.warning(
                 "subagent %r failed on %s; escalating to %s",
-                self.subagent.name, self._model, self._fallback_model,
+                self.subagent.name, first_model, self._fallback_model,
             )
             if self._on_event is not None:
                 await self._on_event(
@@ -358,6 +388,11 @@ class SubagentTool(Tool):
                 model=self._fallback_model, brief=brief, mcp_tools=mcp_tools,
                 run_id=uuid.uuid4().hex,
             )
+            if not is_error and self._check_contract is not None:
+                violation = self._check_contract(output)
+                if violation:
+                    output = f"contract check failed: {violation}"
+                    is_error = True
             turns += fturns
         if self._budget is not None:
             self._budget.record(turns)
@@ -381,6 +416,9 @@ def subagent_as_tool(
     advanced: bool = False,
     provider: LLMProvider | None = None,
     fallback_model: str = "",
+    contract: str = "",
+    check_contract: Callable[[str], str | None] | None = None,
+    router: RouterFn | None = None,
 ) -> Tool:
     """Wrap a Subagent as a Tool the parent agent can call.
 
@@ -389,6 +427,11 @@ def subagent_as_tool(
     ``fallback_model`` is an explicit escalation target (a stronger model) used
     when the subagent's first attempt errors — passed through verbatim, not
     ``subagent.model or default_model``.
+    ``contract`` defaults to the subagent's own ``contract`` field (its YAML
+    acceptance criteria, #3); a non-empty value is appended to every brief so
+    the subagent sees the bar up front.
+    ``router`` (if given) selects the model for each delegation at invoke time
+    (task-type-aware routing, #2).
     """
     description = subagent.description or f"Delegate a subtask to the {subagent.name} subagent."
     return SubagentTool(
@@ -406,6 +449,9 @@ def subagent_as_tool(
         advanced=advanced,
         provider=provider,
         fallback_model=fallback_model,
+        contract=contract or subagent.contract,
+        check_contract=check_contract,
+        router=router,
     )
 
 
@@ -421,6 +467,8 @@ def add_subagents(
     advanced: bool = False,
     subagent_provider: LLMProvider | None = None,
     fallback_model: str = "",
+    check_contract: Callable[[str], str | None] | None = None,
+    router: RouterFn | None = None,
 ) -> None:
     """Register every subagent as a delegation tool on ``agent``.
 
@@ -433,6 +481,8 @@ def add_subagents(
     use — their own API key / base URL, distinct from the parent's.
     ``fallback_model`` (if given) is the escalation target every subagent uses
     when its first attempt errors (see ``SubagentTool``).
+    ``check_contract`` / ``router`` are forwarded to every subagent tool
+    (machine-enforced acceptance criteria #3 / task-type-aware routing #2).
     """
     base = default_model or agent.model
     if not advanced:
@@ -441,6 +491,7 @@ def add_subagents(
                 subagent_as_tool(
                     sa, runner, base, on_event=on_event, parent_tools=agent.tools,
                     provider=subagent_provider, fallback_model=fallback_model,
+                    check_contract=check_contract, router=router,
                 )
             )
         return
@@ -450,6 +501,7 @@ def add_subagents(
             on_event=on_event, concurrent=True, budget=budget, advanced=True,
             parent_tools=agent.tools, provider=subagent_provider,
             fallback_model=fallback_model,
+            check_contract=check_contract, router=router,
         )
         for sa in subagents
     }
@@ -467,6 +519,7 @@ def add_subagents(
                 advanced=True,
                 provider=subagent_provider,
                 fallback_model=fallback_model,
+                check_contract=check_contract, router=router,
             )
         )
 

@@ -83,3 +83,10 @@ def test_subagent_fallback_model_env():
     assert s.subagent_fallback_model == "deepseek-v4-pro"
     # unset => escalation off
     assert Settings.from_env({}).subagent_fallback_model == ""
+
+
+def test_subagent_router_env():
+    s = Settings.from_env({"HARNESS_SUBAGENT_ROUTER": "auto"})
+    assert s.subagent_router == "auto"
+    # unset => task-type-aware routing off (v2 behavior preserved)
+    assert Settings.from_env({}).subagent_router == ""

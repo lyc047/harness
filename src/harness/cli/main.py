@@ -174,6 +174,7 @@ async def _run_chat(args: argparse.Namespace, settings: Settings) -> int:
             subagent_model=settings.subagent_model,
             advanced=settings.subagent_advanced,
             subagent_fallback_model=settings.subagent_fallback_model,
+            subagent_router=settings.subagent_router,
         )
         delegate_tools = sorted(
             name for name in stack.agent.tools.names() if name.startswith("delegate_to_")

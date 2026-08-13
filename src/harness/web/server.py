@@ -51,7 +51,11 @@ def create_app(
         # One read-only stack shared by the stateless REST reads.
         read_ctx = await build_core_stack(s, store=st, prompt=None)
         if s.subagents:
-            add_example_subagents(read_ctx, subagent_fallback_model=s.subagent_fallback_model)
+            add_example_subagents(
+                read_ctx,
+                subagent_fallback_model=s.subagent_fallback_model,
+                subagent_router=s.subagent_router,
+            )
         app.state.settings = s
         app.state.store = st
         app.state.read_ctx = read_ctx

@@ -26,3 +26,7 @@ tools:
   - glob_files
   - grep_files
   - web_search
+contract: |
+  Your final summary must state which subagent did which file, the audit outcome, and the exact path
+  of the finished project. Before finishing, verify the assembled result against the task's module
+  contracts with a read-only pass over the files that exist.

@@ -175,6 +175,7 @@ class Runtime:
             on_event=self._forward_subagent_event,
             advanced=self._advanced,
             subagent_fallback_model=self._settings.subagent_fallback_model,
+            subagent_router=self._settings.subagent_router,
         )
 
     def _rebuild_subagents(self) -> None:

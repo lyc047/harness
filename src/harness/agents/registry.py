@@ -116,6 +116,7 @@ class SubagentSpec:
     model: str = ""  # per-subagent model override; empty => inherit
     max_turns: int = 10
     tools: tuple[str, ...] = ()  # empty => all builtins (backwards compatible)
+    contract: str = ""  # acceptance criteria appended to every delegation brief (#3)
 
 
 class SubagentRegistry:
@@ -161,6 +162,7 @@ class SubagentRegistry:
             model=str(data.get("model") or ""),
             max_turns=turns,
             tools=tools,
+            contract=str(data.get("contract") or ""),
         )
 
     def discover(self) -> list[SubagentSpec]:
@@ -216,6 +218,7 @@ class SubagentRegistry:
             mcp_allowlist=mcp_allowlist,
             model=spec.model,
             max_turns=spec.max_turns,
+            contract=spec.contract,
         )
 
 

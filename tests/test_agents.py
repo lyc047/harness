@@ -642,3 +642,155 @@ async def test_subagent_no_escalation_without_fallback(make_provider) -> None:
     result = await tool.invoke(task="do it")
     assert result.is_error
     assert provider.models == ["flash"]  # exactly one attempt, no escalation
+
+
+# ---- #3: explicit contract (acceptance criteria in the brief + machine hook) ---- #
+
+
+async def test_contract_appended_to_subagent_brief() -> None:
+    """Explicit acceptance criteria (#3) are appended to every brief the
+    subagent receives, so it sees the bar before it starts."""
+    provider = _RecordingProvider([LLMResponse(final_text="done")])
+    tool = subagent_as_tool(
+        _subagent(), Runner(provider), default_model="m",
+        contract="ruff must be clean; pytest must pass; report real output",
+    )
+
+    result = await tool.invoke(task="Implement the module")
+    assert not result.is_error
+
+    users = [m.content or "" for m in provider.fed[-1] if m.role == "user"]
+    assert len(users) == 1
+    assert "Contract — your output is judged against these criteria:" in users[0]
+    assert "ruff must be clean" in users[0]
+
+
+async def test_contract_violation_triggers_escalation(make_provider) -> None:
+    """A check_contract hook that flags a non-compliant output treats it as a
+    failed attempt: the subagent escalates to the fallback model once, and the
+    escalated attempt is re-checked (#3)."""
+    from harness.agents.orchestrator import SubagentEscalated, subagent_as_tool
+    from harness.agents.subagent import Subagent
+
+    def check(output: str) -> str | None:
+        return None if "COMPLIANT" in output else "missing COMPLIANT marker"
+
+    provider = make_provider(
+        [
+            LLMResponse(final_text="first attempt, not compliant"),
+            LLMResponse(final_text="second attempt COMPLIANT"),
+        ]
+    )
+    events: list[object] = []
+
+    async def sink(run_id: str, agent: str, event: object) -> None:
+        events.append(event)
+
+    tool = subagent_as_tool(
+        Subagent(
+            name="worker", instructions="worker instructions",
+            description="Delegate work to worker.", max_turns=2,
+        ),
+        Runner(provider),
+        default_model="flash",
+        fallback_model="pro",
+        check_contract=check,
+        on_event=sink,
+    )
+    result = await tool.invoke(task="produce a compliant answer")
+    assert not result.is_error
+    assert "COMPLIANT" in result.content
+    # first attempt on the cheap model, escalated attempt on the fallback
+    assert provider.models == ["flash", "pro"]
+    assert any(isinstance(e, SubagentEscalated) and e.model == "pro" for e in events)
+
+
+# ---- #2: task-type-aware model routing ---- #
+
+
+def test_classify_subtask_hints() -> None:
+    """classify_subtask tiers: design-heavy subagent name -> pro; brief-text
+    reasoning hints -> pro; everything else -> default ("")."""
+    from harness.agents.routing import classify_subtask
+
+    # name-based (the subagent's whole job is design/reasoning/analysis)
+    assert classify_subtask("frontend_design", "build a page", "") == "pro"
+    assert classify_subtask("security_reviewer", "check the code", "") == "pro"
+    assert classify_subtask("researcher", "look something up", "") == "pro"
+    # keyword-based — normally-mechanical type, reasoning-heavy brief
+    assert classify_subtask("coder", "Design the data model", "") == "pro"
+    assert classify_subtask("coder", "review this function", "") == "pro"
+    assert classify_subtask("coder", "", "architecture of the module") == "pro"
+    # default — no reason to burn a pro token
+    assert classify_subtask("coder", "add a sum function", "") == ""
+    assert classify_subtask("search", "find the file", "") == ""
+
+
+async def test_task_router_routes_design_subtask_to_pro(make_provider) -> None:
+    """A design-heavy subagent (frontend_design) is routed to the pro model for
+    its first attempt, not the flash default (#2)."""
+    from harness.agents.orchestrator import subagent_as_tool
+    from harness.agents.routing import make_task_router
+    from harness.agents.subagent import Subagent
+
+    provider = make_provider([LLMResponse(final_text="design delivered")])
+    tool = subagent_as_tool(
+        Subagent(
+            name="frontend_design", instructions="design UI",
+            description="Delegate UI design.", model="flash", max_turns=2,
+        ),
+        Runner(provider),
+        default_model="flash",
+        router=make_task_router(pro_model="pro"),
+    )
+    result = await tool.invoke(task="Design the landing page UI")
+    assert not result.is_error
+    assert provider.models == ["pro"]
+
+
+async def test_task_router_keeps_mechanical_on_default(make_provider) -> None:
+    """A mechanical coder task with no reasoning hints stays on the flash
+    default even with a router wired (#2)."""
+    from harness.agents.orchestrator import subagent_as_tool
+    from harness.agents.routing import make_task_router
+    from harness.agents.subagent import Subagent
+
+    provider = make_provider([LLMResponse(final_text="code delivered")])
+    tool = subagent_as_tool(
+        Subagent(
+            name="coder", instructions="write code",
+            description="Delegate coding.", model="flash", max_turns=2,
+        ),
+        Runner(provider),
+        default_model="flash",
+        router=make_task_router(pro_model="pro"),
+    )
+    result = await tool.invoke(task="Add a function to compute the sum")
+    assert not result.is_error
+    assert provider.models == ["flash"]
+
+
+async def test_router_routed_failure_does_not_escalate_same_model(make_provider) -> None:
+    """When the router already bumped the first attempt to pro, a failure must
+    NOT trigger a second pro dispatch via the fallback — the escalation guard
+    compares against the model actually used (#2)."""
+    from harness.agents.orchestrator import subagent_as_tool
+    from harness.agents.routing import make_task_router
+    from harness.agents.subagent import Subagent
+
+    provider = make_provider(
+        [LLMResponse(tool_calls=[ToolCall(id="s1", name="some_tool", arguments="{}")])]
+    )
+    tool = subagent_as_tool(
+        Subagent(
+            name="frontend_design", instructions="design UI",
+            description="Delegate UI design.", model="flash", max_turns=1,
+        ),
+        Runner(provider),
+        default_model="flash",
+        fallback_model="pro",  # same model the router would pick — no double dispatch
+        router=make_task_router(pro_model="pro"),
+    )
+    result = await tool.invoke(task="Design a component")
+    assert result.is_error
+    assert provider.models == ["pro"]  # exactly one attempt

@@ -60,6 +60,7 @@ def add_example_subagents(
     on_event: Callable[[str, str, object], Awaitable[None]] | None = None,
     advanced: bool = False,
     subagent_fallback_model: str = "",
+    subagent_router: str = "",
 ) -> None:
     """Register the built-in researcher/coder subagents as delegate tools.
 
@@ -71,6 +72,10 @@ def add_example_subagents(
     ``subagent_fallback_model`` is the escalation target (a stronger model)
     used when a subagent's first attempt errors
     (``HARNESS_SUBAGENT_FALLBACK_MODEL``); empty disables escalation.
+    ``subagent_router`` selects task-type-aware model routing
+    (``HARNESS_SUBAGENT_ROUTER``): ``"auto"`` wires the built-in classifier that
+    sends design/reasoning-heavy subtasks to the parent's (pro) model and keeps
+    mechanical ones on the subagent default; empty disables routing.
     ``on_event`` (if given) is forwarded the events of each nested subagent run
     so a caller can render the subagent's turns/tools (web run view).
     ``advanced`` turns on nested delegation: each subagent gains delegate tools
@@ -83,6 +88,12 @@ def add_example_subagents(
     from harness.agents.examples import example_subagents
     from harness.agents.orchestrator import add_subagents, attach_delegation_protocol
 
+    router = None
+    if subagent_router == "auto":
+        from harness.agents.routing import make_task_router
+
+        router = make_task_router(pro_model=stack.agent.model)
+
     add_subagents(
         stack.agent,
         stack.runner,
@@ -94,6 +105,7 @@ def add_example_subagents(
         advanced=advanced,
         subagent_provider=stack.subagent_provider,
         fallback_model=subagent_fallback_model,
+        router=router,
     )
     # Tell the parent to write self-contained delegation briefs, so isolated
     # subagents (which can't see the conversation) get the context they need.

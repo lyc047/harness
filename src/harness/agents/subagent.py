@@ -25,6 +25,7 @@ class Subagent:
     max_turns: int = 10
     description: str = ""  # guides the parent on when to delegate
     mcp_allowlist: tuple[str, ...] = ()  # mcp_* patterns; resolved at delegation time
+    contract: str = ""  # acceptance criteria appended to every delegation brief (#3)
 
     def as_agent(
         self,

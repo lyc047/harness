@@ -18,3 +18,7 @@ tools:
   - read_file
   - write_file
   - bash
+contract: |
+  Every `##` section of the document must contain non-empty content (no empty stubs); any command or
+  endpoint named in the document must be real and runnable; an API reference table must list every
+  endpoint with its status codes. Return the document path and a summary.

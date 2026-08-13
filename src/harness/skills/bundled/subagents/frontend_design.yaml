@@ -20,3 +20,8 @@ tools:
   - read_file
   - write_file
   - bash
+contract: |
+  The HTML you write must link its own style.css and app.js; every control must be genuinely wired
+  to a JS function via addEventListener or onclick (no dead buttons); every fetch must target a real
+  backend endpoint. Return the list of files you wrote. Prefer vanilla HTML/CSS/JS; no build step
+  unless the task requires one.

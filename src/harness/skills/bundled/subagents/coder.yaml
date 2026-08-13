@@ -34,3 +34,9 @@ tools:
   - grep_files
   - bash
   - web_search
+contract: |
+  Every file you write must be idiomatic Python 3.11: `uv run ruff check <files>` must exit clean
+  and `uv run pytest -q <tests>` must pass on the files you touched; report the actual output of
+  both commands. Keep module contracts (class/function signatures and semantics) exactly as given
+  in the task — fix the implementation, not the interface. No third-party imports unless the task
+  explicitly allows them.

@@ -46,6 +46,40 @@ def test_subagent_without_tools_keeps_full_builtin_set(tmp_path) -> None:
     assert sa.tools.names() == sorted(builtin_registry().names())
 
 
+def test_contract_parsed_from_yaml(tmp_path) -> None:
+    """The `contract:` field (explicit acceptance criteria, #3) parses into
+    SubagentSpec.contract and carries through to the Subagent."""
+    runtime = tmp_path / "skills" / "subagents"
+    runtime.mkdir(parents=True)
+    (runtime / "reviewer.yaml").write_text(
+        "name: reviewer\n"
+        "description: Use when auditing; delegate by default.\n"
+        "instructions: Audit things.\n"
+        "contract: |\n"
+        "  Return a structured findings list and a CLEAN / MUST-FIX verdict.\n",
+        encoding="utf-8",
+    )
+    reg = SubagentRegistry(runtime, bundled_dir=BUNDLED_SUBAGENTS_DIR)
+    spec = reg.get("reviewer")
+    assert spec is not None
+    assert "CLEAN / MUST-FIX" in spec.contract
+    sa = reg.to_subagent(spec)
+    assert "CLEAN / MUST-FIX" in sa.contract
+
+
+def test_bundled_contract_carriers_are_nonempty(tmp_path) -> None:
+    """The five bundled subagents that got explicit contracts (#3) parse a
+    non-empty contract through to the Subagent — so a delegation brief will
+    actually carry acceptance criteria for them."""
+    reg = SubagentRegistry(tmp_path / "empty", bundled_dir=BUNDLED_SUBAGENTS_DIR)
+    specs = {s.name: s for s in reg.discover()}
+    for name in ("coder", "frontend_design", "security_reviewer", "doc_writer", "coordinator"):
+        spec = specs[name]
+        assert spec.contract.strip(), f"{name} has an empty contract"
+        sa = reg.to_subagent(spec)
+        assert sa.contract == spec.contract, name
+
+
 def test_mcp_patterns_carried_not_registered(tmp_path) -> None:
     """`mcp_*` entries are carried on the Subagent for Task-3 propagation and
     never resolve into builtin tool registrations."""

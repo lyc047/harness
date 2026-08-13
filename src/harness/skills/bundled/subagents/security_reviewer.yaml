@@ -19,3 +19,6 @@ tools:
   - glob_files
   - grep_files
   - web_search
+contract: |
+  Return a structured findings list (file:line, HIGH/MEDIUM/LOW, vulnerability, fix) and a final
+  CLEAN or MUST-FIX verdict naming the blocking findings. You are read-only — never modify files.
