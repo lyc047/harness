@@ -766,3 +766,12 @@ Expected: 每组 3 条记录；汇总打印 `PRO-TOKEN REDUCTION`。跑批可在
 git add docs/superpowers/2026-08-13-token-economy-bench-results.md
 git commit -m "docs: token-economy benchmark results (advanced saves pro tokens, quality holds)"
 ```
+
+## 执行偏差记录（2026-08-13 实施时）
+
+1. `scripts/e2e_token_economy.py` 的 `main()` 改为**同步**（v6 先例）：JSONL 读写移到同步 helper `_load_results`/`_append_record`，每轮循环在 `async def _run_all`，避免 ASYNC230/240 触发。导入去掉未用的 `COORDINATOR_YAML`（`_write_coordinator` 自管）；`_fmt_spread` 未用改为只定义 `_spread`。
+2. 结果文件路径可用 env `HARNESS_TOKEN_ECON_RESULTS` 覆盖（冒烟与全量隔离，避免 resume 串扰）。
+3. `SUBAGENT_BUDGET` 实际通过 `settings.replace(subagent_budget=SUBAGENT_BUDGET)` 生效（计划只定义了常量未应用）。
+4. `_auto_approve` 标注为 `Callable[[ToolCall], Awaitable[str]]`（`harness.core.messages.ToolCall`），匹配 `ApprovalPrompt`。
+5. `tests/test_compose.py::test_subagent_provider_built_from_env_key` 不用 monkeypatch（`Settings.from_env(dict)` 不读进程 env），直接把 subagent key 放进 dict。
+6. `tests/test_token_economy_script.py::test_sum_usage_aggregates` 的 reasoning 断言修正为 200_000（两个记录都带 reasoning）。
