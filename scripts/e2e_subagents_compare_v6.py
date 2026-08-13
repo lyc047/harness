@@ -43,6 +43,10 @@ RUNS = int(os.environ.get("HARNESS_COMPARE_RUNS", "3"))
 # subagents worked in parallel. 1800s gives single-agent runs room to finish,
 # and the salvage path below still records verify/pytest if one overruns.
 RUN_TIMEOUT = float(os.environ.get("HARNESS_COMPARE_TIMEOUT", "1800"))
+# Every completed/salvaged run is appended here as JSONL so a process death
+# (sleep/reboot/network flap) only costs the one in-flight run — a relaunch
+# loads prior records and resumes from where it left off.
+RESULTS_FILE = Path(tempfile.gettempdir()) / "harness-pomo-results.jsonl"
 DELEGATE_PREFIX = "delegate_to_"
 
 
@@ -447,10 +451,26 @@ def main() -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix="harness-pomo-"))
     runs: list[dict[str, Any]] = []
+    done: set[tuple[str, int]] = set()
+    if RESULTS_FILE.is_file():
+        for line in RESULTS_FILE.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            done.add((rec["mode"], rec["run"]))
+            runs.append(rec)
+        print(
+            f"resume: {len(done)} runs already recorded in {RESULTS_FILE} — "
+            "skipping them",
+            flush=True,
+        )
     try:
         _wait_health(port)
         for label, forced, advanced in GROUPS:
             for i in range(1, RUNS + 1):
+                if (label, i) in done:
+                    continue
                 out_dir = tmp / f"{label}-{i}"
                 out_dir.mkdir(parents=True, exist_ok=True)
                 prompt = _prompt_forced(str(out_dir)) if forced else _prompt(str(out_dir))
@@ -461,38 +481,42 @@ def main() -> int:
                             timeout=RUN_TIMEOUT,
                         )
                     )
+                    record = {
+                        "mode": label,
+                        "out": str(out_dir),
+                        "metrics": metrics,
+                        "run": i,
+                    }
+                    chains = [" -> ".join(c) for c in cast(list[list[str]], metrics["chain"])]
+                    print(
+                        f"  ran {label}-{i}: verify={metrics['verify_pass']}/5 "
+                        f"pytest={metrics['pytest_passed']} deleg={metrics['delegations']} "
+                        f"waves={metrics['waves']} conc={metrics['max_concurrency']} "
+                        f"depth={metrics['depth']} types={metrics['types']} "
+                        f"web={metrics['web_searches']} bash={metrics['bash']} "
+                        f"sub_turns={metrics['sub_turns']} wall={metrics['seconds']:.1f}s",
+                        flush=True,
+                    )
+                    print(
+                        f"    chains: {' | '.join(chains) if chains else '(none)'}",
+                        flush=True,
+                    )
                 except TimeoutError:
                     print(
                         f"  {label}-{i}: TIMEOUT after {RUN_TIMEOUT:.0f}s — salvaging",
                         flush=True,
                     )
-                    runs.append(
-                        _salvage_run(label, i, out_dir, reason="timeout", seconds=RUN_TIMEOUT)
+                    record = _salvage_run(
+                        label, i, out_dir, reason="timeout", seconds=RUN_TIMEOUT
                     )
-                    continue
                 except _RunFailed as exc:
                     print(f"  {label}-{i}: run failed ({exc}) — salvaging", flush=True)
-                    runs.append(
-                        _salvage_run(
-                            label, i, out_dir, reason=f"run_failed: {exc}", seconds=0.0
-                        )
+                    record = _salvage_run(
+                        label, i, out_dir, reason=f"run_failed: {exc}", seconds=0.0
                     )
-                    continue
-                runs.append({"mode": label, "out": str(out_dir), "metrics": metrics, "run": i})
-                chains = [" -> ".join(c) for c in cast(list[list[str]], metrics["chain"])]
-                print(
-                    f"  ran {label}-{i}: verify={metrics['verify_pass']}/5 "
-                    f"pytest={metrics['pytest_passed']} deleg={metrics['delegations']} "
-                    f"waves={metrics['waves']} conc={metrics['max_concurrency']} "
-                    f"depth={metrics['depth']} types={metrics['types']} "
-                    f"web={metrics['web_searches']} bash={metrics['bash']} "
-                    f"sub_turns={metrics['sub_turns']} wall={metrics['seconds']:.1f}s",
-                    flush=True,
-                )
-                print(
-                    f"    chains: {' | '.join(chains) if chains else '(none)'}",
-                    flush=True,
-                )
+                runs.append(record)
+                with RESULTS_FILE.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         if not runs:
             print("  no runs completed — aborting", file=sys.stderr)
             return 1
