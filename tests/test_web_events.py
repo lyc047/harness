@@ -63,6 +63,7 @@ def test_serialize_tool_result() -> None:
         "content": "$ ls\nok",
         "is_error": False,
         "truncated": False,
+        "offloaded": "",
     }
 
 
@@ -153,3 +154,39 @@ def test_serialize_messages_roundtrip() -> None:
     out = serialize_messages(msgs)
     assert [m["role"] for m in out] == ["system", "user", "assistant"]
     assert out[1]["content"] == "你好"
+
+
+def test_compaction_event_serializes() -> None:
+    from harness.core.runner import CompactionEvent
+
+    frame = serialize_event(CompactionEvent("s1/transcript_0.jsonl", 3, 12_000))
+    assert frame["type"] == "compacted"
+    assert frame["transcript"] == "s1/transcript_0.jsonl"
+    assert frame["kept"] == 3
+    assert frame["freed_tokens"] == 12_000
+
+
+def test_tool_result_offloaded_flag() -> None:
+    from harness.core.runner import ToolResultEvent
+    from harness.core.messages import ToolCall
+    from harness.tools.base import ToolResult
+
+    event = ToolResultEvent(
+        ToolCall(id="c1", name="bash", arguments="{}"),
+        ToolResult.ok("preview", offloaded="s1/offload_c1.txt"),
+    )
+    frame = serialize_event(event)
+    assert frame["type"] == "tool_result"
+    assert frame["offloaded"] == "s1/offload_c1.txt"
+
+
+def test_tool_result_no_offloaded_key_ok() -> None:
+    from harness.core.runner import ToolResultEvent
+    from harness.core.messages import ToolCall
+    from harness.tools.base import ToolResult
+
+    event = ToolResultEvent(
+        ToolCall(id="c2", name="bash", arguments="{}"), ToolResult.ok("tiny")
+    )
+    frame = serialize_event(event)
+    assert frame["offloaded"] == ""

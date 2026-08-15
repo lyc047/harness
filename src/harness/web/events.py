@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from harness.core.messages import Message, ToolCall
-from harness.core.runner import RunDone, ToolResultEvent
+from harness.core.runner import CompactionEvent, RunDone, ToolResultEvent
 from harness.llm.base import StreamReasoning, StreamText, StreamToolCall
 from harness.planning.executor import PlanDone, PlanRevised, StepEnd, StepStart
 from harness.planning.models import Plan, PlanStep
@@ -44,6 +44,7 @@ def tool_result_to_dict(
         "content": content,
         "is_error": result.is_error,
         "truncated": truncated,
+        "offloaded": result.metadata.get("offloaded", ""),
     }
 
 
@@ -98,6 +99,13 @@ def serialize_event(event: object) -> dict[str, Any] | None:
             "tool_call_id": event.tool_call.id,
             "name": event.tool_call.name,
             **tool_result_to_dict(event.result),
+        }
+    if isinstance(event, CompactionEvent):
+        return {
+            "type": "compacted",
+            "transcript": event.transcript_path,
+            "kept": event.kept,
+            "freed_tokens": event.freed_tokens,
         }
     if isinstance(event, RunDone):
         result = event.result

@@ -5,7 +5,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.panel import Panel
 
-from harness.core.runner import RunDone, ToolResultEvent
+from harness.core.runner import CompactionEvent, RunDone, ToolResultEvent
 from harness.llm.base import StreamReasoning, StreamText, StreamToolCall
 
 TRUNCATE_CHARS = 800
@@ -28,6 +28,11 @@ def render_stream_event(event: object, console: Console) -> None:
         color = "red" if event.result.is_error else "green"
         console.print(
             Panel(body, title=f"← {event.tool_call.name}", border_style=color, expand=False)
+        )
+    elif isinstance(event, CompactionEvent):
+        console.print(
+            f"\n[bold magenta]⟲ 上下文已压缩[/] 保留最近 {event.kept} 条，"
+            f"释放 ~{event.freed_tokens} tokens（transcript: {event.transcript_path}）"
         )
     elif isinstance(event, RunDone):
         console.print("")
