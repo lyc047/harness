@@ -352,12 +352,13 @@ def _call(session_id, result, store, *, threshold=20_000):
 async def test_offloads_oversized_result(tmp_path):
     store = ContextStore(tmp_path)
     offload = OffloadExecutor(store, threshold=10)
-    big = "line one\n" + "x" * 400
+    big = "line one\n" + "x" * 4000  # 单行超预览窗口（2K）：引用必须截断全文
     result = await offload.process(
         "sess1", ToolCall(id="c1", name="bash", arguments="{}"), ToolResult.ok(big)
     )
     # 上下文里是引用而非全文
-    assert "x" * 400 not in result.content
+    assert "x" * 4000 not in result.content
+    assert result.content.count("x") < 4000
     assert "[offloaded to" in result.content
     assert "offload_c1.txt" in result.content
     # 全文落盘
@@ -495,7 +496,7 @@ git commit -m "feat(context): OffloadExecutor — oversized tool output → disk
   - `class CompactRequest:` `set(self) -> None`、`take(self) -> bool`（原子读取并复位）
   - `@dataclass CompactionResult:` `messages: list[Message]`、`changed: bool`、`transcript_path: str | None = None`、`kept: int = 0`、`freed_tokens: int = 0`
   - `class ContextCompactor`:
-    - `__init__(self, store: ContextStore, provider: LLMProvider, *, window: int = 1_000_000, trigger: float = 0.85, keep: int = 20, token_estimator: Callable[[list[Message]], int] = estimate_message_tokens)`
+    - `__init__(self, store: ContextStore, provider: LLMProvider, *, window: int = 1_000_000, trigger: float = 0.85, keep: int = 20, token_estimator: Callable[[list[Message]], int] = estimate_message_tokens, request: CompactRequest | None = None)`（`request` 为 None 时自建；compose 会注入与 `compact_conversation` 工具共享的同一实例——spec §8）
     - `async maybe_compact(self, messages: list[Message], *, session_id: str | None, turn: int) -> CompactionResult`
     - `request_compaction(self) -> None`
   - `make_compact_conversation_tool(request: CompactRequest) -> Tool`
@@ -716,7 +717,7 @@ class ContextCompactor:
         self._trigger = trigger
         self._keep = keep
         self._token_estimator = token_estimator
-        self._request = CompactRequest()
+        self._request = request or CompactRequest()
         self._recent_budget = int(window * _RECENT_TOKEN_FRACTION)
 
     def request_compaction(self) -> None:
@@ -1264,6 +1265,7 @@ from harness.context.store import ContextStore
             window=settings.context_window,
             trigger=settings.context_trigger,
             keep=settings.context_keep,
+            request=request,  # 与 compact_conversation 工具共享同一个 flag（spec §8）
         )
         agent.tools.register(make_compact_conversation_tool(request))
 ```
