@@ -113,6 +113,22 @@ SUBAGENT_BUDGET = int(os.environ.get("HARNESS_SUBAGENT_BUDGET", "120"))
 # byte-for-byte identical — repair only activates when set explicitly via
 # HARNESS_COMPARE_REPAIR.
 REPAIR_MAX = int(os.environ.get("HARNESS_COMPARE_REPAIR", "0"))
+# Model override for the repair dispatch (#1+#2): "pro" sends the fix subagent
+# straight to the main pro model (flash coder provably can't fix the hostile-
+# input probes — see the 2026-08-14 experiment); "" keeps the subagent's
+# configured default. "pro" is a symbol, not a literal model name, because the
+# benchmark already resolves the main model via stack.agent.model.
+REPAIR_MODEL = os.environ.get("HARNESS_COMPARE_REPAIR_MODEL", "").strip()
+
+
+def _fix_model_for(repair_env: str, agent_model: str) -> str:
+    """Map HARNESS_COMPARE_REPAIR_MODEL to an explicit fix-subagent model.
+
+    ``"pro"`` -> ``agent_model`` (the main pro model); anything else (including
+    empty/unset) -> ``""``, meaning the fix subagent keeps its own configured
+    model (flash by default). Pure so the env mapping is unit-testable.
+    """
+    return agent_model if repair_env == "pro" else ""
 
 
 # ---- pure helpers (imported by tests) ---- #
@@ -290,16 +306,18 @@ def _build_providers(settings: Settings) -> tuple[OpenAICompatProvider, OpenAICo
 
 
 async def _dispatch_fix(
-    stack: Any, *, out: Path, brief: str, subs: list[str], advanced: bool
+    stack: Any, *, out: Path, brief: str, subs: list[str], advanced: bool, model: str = ""
 ) -> int:
     """Dispatch one repair subagent; return the number dispatched successfully.
 
     advanced mode reuses the live delegate tools (``delegate_to_<name>``) so a
-    fix counts against the run's subagent budget and model routing. normal mode
-    spawns a fresh pro repair agent — it has no subagents, so this is the only
-    repair path and the pro-token cost is exactly what the benchmark is trying
-    to measure. Degrades (logs, returns 0) on any failure rather than crashing
-    the benchmark.
+    fix counts against the run's subagent budget and model routing. ``model``,
+    when non-empty, forces the fix subagent's first attempt onto that model
+    (per-call override — the "repair goes pro" combination of #1+#2); "" keeps
+    the subagent's configured default. normal mode spawns a fresh pro repair
+    agent — it has no subagents, so this is the only repair path and the
+    pro-token cost is exactly what the benchmark is trying to measure. Degrades
+    (logs, returns 0) on any failure rather than crashing the benchmark.
     """
     dispatched = 0
     if advanced:
@@ -313,6 +331,7 @@ async def _dispatch_fix(
                     task=brief,
                     scope=str(out),
                     expected_output="Report which file(s) changed and the final VERIFY_PASS line.",
+                    model=model,
                 )
                 dispatched += 1
             except Exception as exc:  # noqa: BLE001 — degrade, keep the benchmark alive
@@ -343,7 +362,8 @@ async def _dispatch_fix(
 
 
 async def _repair_loop(
-    stack: Any, out: Path, *, label: str, i: int, advanced: bool, max_rounds: int
+    stack: Any, out: Path, *, label: str, i: int, advanced: bool, max_rounds: int,
+    model: str = "",
 ) -> tuple[int, list[str], int, dict, int, int]:
     """Gate-driven repair: dispatch fix subagents until gates pass or progress stalls.
 
@@ -363,12 +383,12 @@ async def _repair_loop(
             break
         prev = (verify_pass, rob.get("robust_pass", 0))
         print(
-            f"    repair round {rounds + 1}: {subs} (verify={verify_pass}/5 "
-            f"robust={rob.get('robust_pass', 0)}/6)",
+            f"    repair round {rounds + 1}: {subs} model={model or 'subagent-default'} "
+            f"(verify={verify_pass}/5 robust={rob.get('robust_pass', 0)}/6)",
             flush=True,
         )
         dispatched_total += await _dispatch_fix(
-            stack, out=out, brief=brief, subs=subs, advanced=advanced
+            stack, out=out, brief=brief, subs=subs, advanced=advanced, model=model
         )
         rounds += 1
         verify_pass, fail_lines = _run_verify(out)
@@ -473,10 +493,11 @@ async def _run_once(
             pytest_passed = _run_pytest(out_dir)
             rob = robust_score(label, i, out_dir)
             if REPAIR_MAX > 0:
+                fix_model = _fix_model_for(REPAIR_MODEL, stack.agent.model)
                 (verify_pass, _fail_lines, pytest_passed, rob,
                  repair_rounds, repair_dispatches) = await _repair_loop(
                     stack, out_dir, label=label, i=i,
-                    advanced=advanced, max_rounds=REPAIR_MAX,
+                    advanced=advanced, max_rounds=REPAIR_MAX, model=fix_model,
                 )
         except Exception as exc:  # noqa: BLE001 — degrade, don't crash the benchmark
             reason = f"{type(exc).__name__}: {exc} (post-run gates/repair)"

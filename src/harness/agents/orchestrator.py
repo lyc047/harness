@@ -349,6 +349,11 @@ class SubagentTool(Tool):
         if self._advanced and self._budget is not None and self._budget.remaining() <= 0:
             return ToolResult.error("subagent budget exhausted", agent=self.subagent.name)
         mcp_tools = resolve_mcp_tools(self.subagent, self._parent_tools)
+        # Per-call model override (used by the benchmark's repair dispatch to
+        # send a fix subagent straight to a stronger model): explicit and wins
+        # over everything below. Not exposed to the LLM (the parameters_schema
+        # stays fixed); it's a Python-side override for callers like repair.
+        override_model = str(kwargs.get("model") or "").strip()
         # Task-type-aware routing (#2): the router may bump design/reasoning-heavy
         # subtasks onto a stronger model for the first attempt; "" keeps the
         # configured default. The fallback_model escalation below still guards a
@@ -356,7 +361,7 @@ class SubagentTool(Tool):
         routed = (
             self._router(self.subagent.name, task, scope) if self._router is not None else ""
         )
-        first_model = routed or self._model
+        first_model = override_model or routed or self._model
         first_run_id = uuid.uuid4().hex
         output, turns, is_error = await self._invoke_attempt(
             model=first_model, brief=brief, mcp_tools=mcp_tools, run_id=first_run_id

@@ -794,3 +794,46 @@ async def test_router_routed_failure_does_not_escalate_same_model(make_provider)
     result = await tool.invoke(task="Design a component")
     assert result.is_error
     assert provider.models == ["pro"]  # exactly one attempt
+
+
+async def test_invoke_model_override_forces_first_attempt_pro(make_provider) -> None:
+    """A per-call ``model`` override sends the subagent straight to that model
+    on the first attempt, bypassing the configured default (#1 repair->pro)."""
+    from harness.agents.orchestrator import subagent_as_tool
+    from harness.agents.subagent import Subagent
+
+    provider = make_provider([LLMResponse(final_text="fixed")])
+    tool = subagent_as_tool(
+        Subagent(
+            name="coder", instructions="write code",
+            description="Delegate coding.", model="flash", max_turns=2,
+        ),
+        Runner(provider),
+        default_model="flash",
+    )
+    result = await tool.invoke(task="Fix api.py", model="pro")
+    assert not result.is_error
+    assert provider.models == ["pro"]  # override beat the flash default
+
+
+async def test_invoke_model_override_failure_no_escalation_same_model(make_provider) -> None:
+    """An overridden attempt that errors must not trigger a fallback dispatch to
+    the same model — the escalation guard compares against the override."""
+    from harness.agents.orchestrator import subagent_as_tool
+    from harness.agents.subagent import Subagent
+
+    provider = make_provider(
+        [LLMResponse(tool_calls=[ToolCall(id="s1", name="some_tool", arguments="{}")])]
+    )
+    tool = subagent_as_tool(
+        Subagent(
+            name="coder", instructions="write code",
+            description="Delegate coding.", model="flash", max_turns=1,
+        ),
+        Runner(provider),
+        default_model="flash",
+        fallback_model="pro",  # same model as the override — no double dispatch
+    )
+    result = await tool.invoke(task="Fix api.py", model="pro")
+    assert result.is_error
+    assert provider.models == ["pro"]  # exactly one attempt

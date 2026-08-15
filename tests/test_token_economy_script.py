@@ -15,6 +15,7 @@ from e2e_token_economy import (  # noqa: E402
     GATE_SUBAGENT,
     ROBUST_EXPECT,
     _build_repair_brief,
+    _fix_model_for,
     _fmt_stats,
     _parse_fail,
     _robust_failures,
@@ -202,3 +203,12 @@ def test_build_repair_brief_dedupes_subagents_and_empty(tmp_path):
 
     # unparseable lines only -> nothing to dispatch
     assert _build_repair_brief(out, ["not a FAIL line", "PASS engine"], {}) == ("", [])
+
+
+def test_fix_model_for_maps_pro_env():
+    # "pro" resolves to the main pro model (repair goes pro, #1+#2)
+    assert _fix_model_for("pro", "deepseek-v4-pro") == "deepseek-v4-pro"
+    # unset / any other value keeps the fix subagent's own configured model
+    assert _fix_model_for("", "deepseek-v4-pro") == ""
+    assert _fix_model_for("flash", "deepseek-v4-pro") == ""
+    assert _fix_model_for("garbage", "deepseek-v4-pro") == ""
