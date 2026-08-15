@@ -15,6 +15,8 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
+from harness.context.compactor import ContextCompactor
+from harness.context.offload import OffloadExecutor
 from harness.core.agent import Agent
 from harness.core.hooks import Hooks
 from harness.core.messages import Message, ToolCall
@@ -55,6 +57,15 @@ class ToolResultEvent:
     result: ToolResult
 
 
+@dataclass
+class CompactionEvent:
+    """Yielded after a turn-boundary compaction (CLI/web render a notice)."""
+
+    transcript_path: str
+    kept: int
+    freed_tokens: int
+
+
 async def default_executor(agent: Agent, tool_call: ToolCall) -> ToolResult:
     """Resolve a tool call against the agent's registry and run it."""
     tool = agent.tools.get(tool_call.name)
@@ -72,12 +83,16 @@ class Runner:
         session_store: SessionStore | None = None,
         tool_executor: ToolExecutor | None = None,
         pause_check: PauseCheck | None = None,
+        offload_processor: OffloadExecutor | None = None,
+        compactor: ContextCompactor | None = None,
     ) -> None:
         self._provider = provider
         self._hooks = hooks or Hooks()
         self._session_store = session_store
         self._tool_executor = tool_executor or default_executor
         self._pause_check = pause_check
+        self._offload_processor = offload_processor
+        self._compactor = compactor
 
     # -- public API -- #
 
@@ -162,9 +177,36 @@ class Runner:
             max_turns = agent.max_turns
         await self._persist(session_id, messages)
 
+        # Per-run offload binding: session_id is a run argument, so the
+        # processor is wrapped here (it is not a static chain layer).
+        executor: ToolExecutor = self._tool_executor
+        if self._offload_processor is not None:
+            inner, offload = executor, self._offload_processor
+
+            async def bound_executor(agent: Agent, tc: ToolCall) -> ToolResult:
+                return await offload.process(session_id, tc, await inner(agent, tc))
+
+            executor = bound_executor
+
         tool_schemas = agent.tool_schemas()
 
         for turn in range(start_turn, max_turns):
+            if self._compactor is not None:
+                compacted = await self._compactor.maybe_compact(
+                    messages, session_id=session_id, turn=turn
+                )
+                if compacted.changed:
+                    messages = compacted.messages
+                    await self._persist(session_id, messages)
+                    await self._hooks.emit(
+                        self._hooks.on_compacted,
+                        compacted.transcript_path,
+                        compacted.kept,
+                        compacted.freed_tokens,
+                    )
+                    yield CompactionEvent(
+                        compacted.transcript_path, compacted.kept, compacted.freed_tokens
+                    )
             await self._hooks.emit(self._hooks.on_turn_start, turn, agent)
             await self._hooks.emit(self._hooks.on_model_call, agent)
 
@@ -201,7 +243,7 @@ class Runner:
                     for tool_call in response.tool_calls:
                         await self._hooks.emit(self._hooks.on_tool_call, tool_call, agent)
                     gathered = await asyncio.gather(
-                        *(self._tool_executor(agent, tc) for tc in response.tool_calls),
+                        *(executor(agent, tc) for tc in response.tool_calls),
                         return_exceptions=True,
                     )
                     results = [
@@ -213,7 +255,7 @@ class Runner:
                     results = []
                     for tool_call in response.tool_calls:
                         await self._hooks.emit(self._hooks.on_tool_call, tool_call, agent)
-                        results.append(await self._tool_executor(agent, tool_call))
+                        results.append(await executor(agent, tool_call))
 
                 for tool_call, tool_result in zip(response.tool_calls, results, strict=True):
                     await self._hooks.emit(

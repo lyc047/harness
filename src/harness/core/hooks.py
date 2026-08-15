@@ -24,6 +24,7 @@ class Hooks:
     on_tool_call: AsyncHook | None = None
     on_tool_result: AsyncHook | None = None
     on_model_call: AsyncHook | None = None
+    on_compacted: AsyncHook | None = None
     on_final: AsyncHook | None = None
 
     async def emit(self, hook: AsyncHook | None, *args: Any, **kwargs: Any) -> None:
