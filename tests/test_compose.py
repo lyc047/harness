@@ -57,3 +57,30 @@ async def test_subagent_provider_built_from_env_key(tmp_path):
     assert stack.subagent_provider is not None
     assert stack.subagent_provider._api_key == "sk-sub"
     assert stack.subagent_provider.model == "deepseek-v4-flash"
+
+
+def _ctx_settings(tmp_path) -> Settings:
+    return Settings.from_env(
+        {
+            "HARNESS_DB_PATH": str(tmp_path / "harness.db"),
+            "HARNESS_SKILLS_DIR": str(tmp_path / "skills"),
+            "HARNESS_PERMISSIONS_FILE": str(tmp_path / "nonexistent.toml"),
+            "HARNESS_CONTEXT_ENABLED": "true",
+            "HARNESS_CONTEXT_DIR": str(tmp_path / "ctx"),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_core_stack_wires_context(tmp_path):
+    stack = await build_core_stack(_ctx_settings(tmp_path), provider=_FakeProvider("main"))
+    assert stack.context_store is not None
+    assert "compact_conversation" in stack.agent.tools.names()
+
+
+@pytest.mark.asyncio
+async def test_build_core_stack_disabled_context(tmp_path):
+    settings = _ctx_settings(tmp_path).replace(context_enabled=False)
+    stack = await build_core_stack(settings, provider=_FakeProvider("main"))
+    assert stack.context_store is None
+    assert "compact_conversation" not in stack.agent.tools.names()

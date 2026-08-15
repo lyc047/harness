@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from harness.config import Settings
+from harness.context.store import ContextStore
 from harness.core.compose import add_example_subagents, build_core_stack
 from harness.memory.store import Store
 from harness.web import commands
@@ -107,6 +108,9 @@ def create_app(
     @app.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, Any]:
         await app.state.store.sessions.delete_session(session_id)
+        ctx: ContextStore | None = getattr(app.state.read_ctx, "context_store", None)
+        if ctx is not None:
+            ctx.cleanup(session_id)
         return {"ok": True}
 
     @app.get("/api/checkpoints")

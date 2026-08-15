@@ -14,6 +14,13 @@ from pathlib import Path
 
 from harness.agents.orchestrator import SubagentBudget
 from harness.config import Settings
+from harness.context.compactor import (
+    CompactRequest,
+    ContextCompactor,
+    make_compact_conversation_tool,
+)
+from harness.context.offload import OffloadExecutor
+from harness.context.store import ContextStore
 from harness.core.agent import Agent
 from harness.core.hooks import Hooks
 from harness.core.locking import FileLockExecutor
@@ -139,6 +146,7 @@ class CoreStack:
     planner: Planner
     subagent_budget: SubagentBudget
     subagent_provider: LLMProvider | None = None  # own key/base_url for subagents
+    context_store: ContextStore | None = None    # context-compression artifacts
 
 
 async def build_core_stack(
@@ -213,12 +221,35 @@ async def build_core_stack(
         on_pause=on_pause,
     )
 
+    # Context compression: offload oversized tool output, auto-summarize long
+    # histories, and expose the on-demand compact tool (all default-on).
+    context_store: ContextStore | None = None
+    offload_processor: OffloadExecutor | None = None
+    compactor: ContextCompactor | None = None
+    if settings.context_enabled:
+        context_store = ContextStore(Path(settings.context_dir))
+        offload_processor = OffloadExecutor(
+            context_store, threshold=settings.context_offload_threshold
+        )
+        request = CompactRequest()
+        compactor = ContextCompactor(
+            context_store,
+            provider,
+            window=settings.context_window,
+            trigger=settings.context_trigger,
+            keep=settings.context_keep,
+            request=request,  # 与 compact_conversation 工具共享同一个 flag（spec §8）
+        )
+        agent.tools.register(make_compact_conversation_tool(request))
+
     runner = Runner(
         provider,
         session_store=store.sessions,
         tool_executor=approval,
         pause_check=pause_check,
         hooks=hooks,
+        offload_processor=offload_processor,
+        compactor=compactor,
     )
     planner = Planner(provider, settings.model)
 
@@ -235,4 +266,5 @@ async def build_core_stack(
         planner=planner,
         subagent_budget=SubagentBudget(settings.subagent_budget),
         subagent_provider=subagent_provider,
+        context_store=context_store,
     )
