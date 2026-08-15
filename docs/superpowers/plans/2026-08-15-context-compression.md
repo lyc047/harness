@@ -837,6 +837,8 @@ Create `tests/test_runner_compaction.py`：
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from harness.context.compactor import ContextCompactor
@@ -849,7 +851,7 @@ from harness.llm.base import LLMResponse
 from harness.tools.base import tool
 from harness.tools.registry import ToolRegistry
 
-from tests.conftest import FakeProvider
+from conftest import FakeProvider  # tests/ 无 __init__.py，pytest prepend 模式把 tests/ 加进 sys.path
 
 
 class _CapturingProvider(FakeProvider):
@@ -885,7 +887,7 @@ async def test_compaction_at_turn_boundary(tmp_path):
 
     main_provider = _CapturingProvider(
         script=[
-            LLMResponse(tool_calls=[ToolCall(id="c1", name="echo", arguments='{"text": "x" * 200}')]),
+            LLMResponse(tool_calls=[ToolCall(id="c1", name="echo", arguments=json.dumps({"text": "x" * 200}))]),
             LLMResponse(final_text="done"),
         ]
     )
@@ -908,7 +910,7 @@ async def test_offload_binding_reduces_context(tmp_path):
     offload = OffloadExecutor(ctx, threshold=10)
     provider = _CapturingProvider(
         script=[
-            LLMResponse(tool_calls=[ToolCall(id="c1", name="echo", arguments='{"text": "x" * 200}')]),
+            LLMResponse(tool_calls=[ToolCall(id="c1", name="echo", arguments=json.dumps({"text": "x" * 4000}))]),
             LLMResponse(final_text="done"),
         ]
     )
@@ -919,7 +921,7 @@ async def test_offload_binding_reduces_context(tmp_path):
     # 第二次 model call 里工具消息是引用而非全文
     assert len(provider.seen) == 2
     tool_msg = next(m for m in provider.seen[1] if m.role == "tool")
-    assert "x" * 200 not in tool_msg.content
+    assert "x" * 4000 not in tool_msg.content
     assert "[offloaded to" in tool_msg.content
     assert list((tmp_path / "ctx" / "s1").glob("offload_*.txt"))
 
@@ -1058,7 +1060,7 @@ Expected: PASS（新增 3 个 + 既有 runner 全部用例；若 test_runner.py 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/harness/core/runner.py tests/test_runner_compaction.py
+git add src/harness/core/runner.py src/harness/core/hooks.py tests/test_runner_compaction.py
 git commit -m "feat(context): runner integrates turn-boundary compaction + per-run offload"
 ```
 
