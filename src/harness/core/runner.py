@@ -191,23 +191,28 @@ class Runner:
         tool_schemas = agent.tool_schemas()
 
         for turn in range(start_turn, max_turns):
+            compacted = None
             if self._compactor is not None:
-                compacted = await self._compactor.maybe_compact(
-                    messages, session_id=session_id, turn=turn
+                try:
+                    compacted = await self._compactor.maybe_compact(
+                        messages, session_id=session_id, turn=turn
+                    )
+                except Exception:  # noqa: BLE001 — a compaction failure must never block the turn
+                    logger.warning("compaction failed; continuing with full history", exc_info=True)
+                    compacted = None
+            if compacted is not None and compacted.changed:
+                messages = compacted.messages
+                transcript_path = compacted.transcript_path or ""
+                await self._persist(session_id, messages)
+                await self._hooks.emit(
+                    self._hooks.on_compacted,
+                    transcript_path,
+                    compacted.kept,
+                    compacted.freed_tokens,
                 )
-                if compacted.changed:
-                    messages = compacted.messages
-                    transcript_path = compacted.transcript_path or ""
-                    await self._persist(session_id, messages)
-                    await self._hooks.emit(
-                        self._hooks.on_compacted,
-                        transcript_path,
-                        compacted.kept,
-                        compacted.freed_tokens,
-                    )
-                    yield CompactionEvent(
-                        transcript_path, compacted.kept, compacted.freed_tokens
-                    )
+                yield CompactionEvent(
+                    transcript_path, compacted.kept, compacted.freed_tokens
+                )
             await self._hooks.emit(self._hooks.on_turn_start, turn, agent)
             await self._hooks.emit(self._hooks.on_model_call, agent)
 

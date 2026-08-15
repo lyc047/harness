@@ -43,9 +43,9 @@ async def test_trigger_by_size(tmp_path):
     msgs = result.messages
     assert msgs[0].content == "sys"                      # system 指令保留
     assert "summarized." in msgs[1].content              # 摘要消息
-    assert "compacted transcript: s1/transcript_0.jsonl" in msgs[1].content
+    assert "compacted transcript: s1/transcript_0_" in msgs[1].content
     assert len(msgs) <= 4                                # system + 摘要 + 保留 ≤ 2
-    assert (tmp_path / "s1" / "transcript_0.jsonl").exists()
+    assert list((tmp_path / "s1").glob("transcript_0_*.jsonl"))
     assert result.freed_tokens > 0
 
 
@@ -114,3 +114,35 @@ def test_compact_tool_sets_request():
     tool = make_compact_conversation_tool(request)
     assert isinstance(tool, Tool)
     assert tool.name == "compact_conversation"
+
+
+@pytest.mark.asyncio
+async def test_transcript_write_failure_still_compacts(tmp_path):
+    root = tmp_path / "blocker"
+    root.write_text("x", encoding="utf-8")  # 用文件挡住 mkdir → 写 transcript 必失败
+    store = ContextStore(root)
+    provider = _FakeComplete(script=[LLMResponse(final_text="summarized.")])
+    comp = ContextCompactor(store, provider, window=100, trigger=1.0, keep=2)
+    result = await comp.maybe_compact(_big_history(), session_id="s1", turn=0)
+    assert result.changed is True
+    assert result.transcript_path is None
+    assert "compacted transcript:" not in result.messages[1].content
+
+
+@pytest.mark.asyncio
+async def test_compact_tool_invoke_triggers_compaction(tmp_path):
+    request = CompactRequest()
+    tool = make_compact_conversation_tool(request)
+    store = ContextStore(tmp_path)
+    provider = _FakeComplete(script=[LLMResponse(final_text="summarized.")])
+    # 大窗口 → 大小触发永不命中，只有 flag 能驱动压缩
+    comp = ContextCompactor(
+        store, provider, window=1_000_000, trigger=0.85, keep=20, request=request,
+    )
+    result = await tool.invoke(reason="running out")
+    assert result.is_error is False
+    assert request.requested is True  # tool 已置位一次性 flag
+    msgs = [Message.system("sys"), Message.user("hi")]
+    comp_result = await comp.maybe_compact(msgs, session_id="s1", turn=0)
+    assert comp_result.changed is True  # flag（而非大小）驱动了压缩
+    assert request.requested is False  # flag 已被 maybe_compact 消费

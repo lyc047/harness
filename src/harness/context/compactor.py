@@ -19,7 +19,10 @@ from harness.context.store import (
 )
 from harness.core.messages import Message
 from harness.llm.base import LLMProvider
+from harness.observability.logging import get_logger
 from harness.tools.base import Tool, tool
+
+logger = get_logger("context")
 
 SUMMARY_PROMPT = """\
 You are compressing a conversation so it can continue without the full history.
@@ -102,18 +105,27 @@ class ContextCompactor:
         self, messages: list[Message], *, session_id: str, turn: int
     ) -> CompactionResult:
         before = self._token_estimator(messages)
-        transcript_path = self._store.write_transcript(session_id, turn, messages)
+        transcript_path = None
+        try:
+            transcript_path = self._store.write_transcript(session_id, turn, messages)
+        except Exception:  # noqa: BLE001 — a transcript failure must never block the turn
+            logger.warning("transcript write failed; compacting without it", exc_info=True)
         summary = await self._summarize(messages)
         recent = self._recent(messages)
-        summary_msg = Message.system(
-            f"{summary}\n\ncompacted transcript: {self._store.relpath(transcript_path)}"
-        )
+        if transcript_path is not None:
+            summary_msg = Message.system(
+                f"{summary}\n\ncompacted transcript: {self._store.relpath(transcript_path)}"
+            )
+        else:
+            summary_msg = Message.system(summary)
         new_messages = [messages[0], summary_msg, *recent]
         after = self._token_estimator(new_messages)
         return CompactionResult(
             messages=new_messages,
             changed=True,
-            transcript_path=self._store.relpath(transcript_path),
+            transcript_path=(
+                self._store.relpath(transcript_path) if transcript_path is not None else None
+            ),
             kept=len(recent),
             freed_tokens=before - after,
         )

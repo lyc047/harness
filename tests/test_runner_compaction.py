@@ -12,7 +12,7 @@ from harness.context.offload import OffloadExecutor
 from harness.context.store import ContextStore
 from harness.core.agent import Agent
 from harness.core.messages import ToolCall
-from harness.core.runner import CompactionEvent, Runner
+from harness.core.runner import CompactionEvent, RunDone, Runner
 from harness.llm.base import LLMResponse
 from harness.tools.base import tool
 from harness.tools.registry import ToolRegistry
@@ -41,6 +41,13 @@ def _registry():
     r = ToolRegistry()
     r.register(echo)
     return r
+
+
+class _BoomCompactor:
+    """Duck-typed compactor whose maybe_compact always raises."""
+
+    async def maybe_compact(self, messages, *, session_id, turn):
+        raise RuntimeError("boom")
 
 
 @pytest.mark.asyncio
@@ -115,3 +122,13 @@ async def test_no_context_no_change(tmp_path):
     events = [e async for e in runner.run_streamed(agent, "hi", session_id="s1")]
     assert not [e for e in events if isinstance(e, CompactionEvent)]
     assert len(provider.seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_compactor_failure_does_not_abort_turn():
+    provider = _CapturingProvider(script=[LLMResponse(final_text="done")])
+    agent = Agent(name="test", instructions="sys", tools=_registry(), max_turns=5)
+    runner = Runner(provider, compactor=_BoomCompactor())
+    events = [e async for e in runner.run_streamed(agent, "hi", session_id="s1")]
+    assert len(provider.seen) == 1  # model call 照常发生，异常被吞掉
+    assert any(isinstance(e, RunDone) for e in events)
