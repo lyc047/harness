@@ -120,7 +120,7 @@ class Runner:
         session_id: str | None = None,
         concurrent: bool = False,
         provider: LLMProvider | None = None,
-    ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
+    ) -> AsyncIterator[StreamEvent | ToolResultEvent | CompactionEvent | RunDone]:
         """Stream events of a full run; a final :class:`RunDone` ends the stream.
 
         ``concurrent`` runs the tool calls of each multi-call turn in parallel
@@ -141,7 +141,7 @@ class Runner:
         *,
         session_id: str | None = None,
         concurrent: bool = False,
-    ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
+    ) -> AsyncIterator[StreamEvent | ToolResultEvent | CompactionEvent | RunDone]:
         """Continue a paused run from its :class:`RunState` checkpoint."""
         return self._run_streamed(
             agent,
@@ -162,7 +162,7 @@ class Runner:
         resume_state: RunState | None = None,
         concurrent: bool = False,
         provider: LLMProvider | None = None,
-    ) -> AsyncIterator[StreamEvent | ToolResultEvent | RunDone]:
+    ) -> AsyncIterator[StreamEvent | ToolResultEvent | CompactionEvent | RunDone]:
         stream_provider = provider or self._provider
         await self._hooks.emit(self._hooks.on_run_start, agent)
         if resume_state is not None:
@@ -197,15 +197,16 @@ class Runner:
                 )
                 if compacted.changed:
                     messages = compacted.messages
+                    transcript_path = compacted.transcript_path or ""
                     await self._persist(session_id, messages)
                     await self._hooks.emit(
                         self._hooks.on_compacted,
-                        compacted.transcript_path,
+                        transcript_path,
                         compacted.kept,
                         compacted.freed_tokens,
                     )
                     yield CompactionEvent(
-                        compacted.transcript_path, compacted.kept, compacted.freed_tokens
+                        transcript_path, compacted.kept, compacted.freed_tokens
                     )
             await self._hooks.emit(self._hooks.on_turn_start, turn, agent)
             await self._hooks.emit(self._hooks.on_model_call, agent)
