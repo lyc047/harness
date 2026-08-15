@@ -167,8 +167,8 @@ def test_compaction_event_serializes() -> None:
 
 
 def test_tool_result_offloaded_flag() -> None:
-    from harness.core.runner import ToolResultEvent
     from harness.core.messages import ToolCall
+    from harness.core.runner import ToolResultEvent
     from harness.tools.base import ToolResult
 
     event = ToolResultEvent(
@@ -181,8 +181,8 @@ def test_tool_result_offloaded_flag() -> None:
 
 
 def test_tool_result_no_offloaded_key_ok() -> None:
-    from harness.core.runner import ToolResultEvent
     from harness.core.messages import ToolCall
+    from harness.core.runner import ToolResultEvent
     from harness.tools.base import ToolResult
 
     event = ToolResultEvent(

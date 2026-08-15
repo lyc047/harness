@@ -10,11 +10,6 @@ from harness.core.messages import ToolCall
 from harness.tools.base import ToolResult
 
 
-def _call(session_id, result, store, *, threshold=20_000):
-    offload = OffloadExecutor(store, threshold=threshold)
-    return result
-
-
 @pytest.mark.asyncio
 async def test_offloads_oversized_result(tmp_path):
     store = ContextStore(tmp_path)

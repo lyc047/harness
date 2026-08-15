@@ -6,7 +6,6 @@ import pytest
 
 from harness.context.compactor import (
     CompactRequest,
-    CompactionResult,
     ContextCompactor,
     make_compact_conversation_tool,
 )

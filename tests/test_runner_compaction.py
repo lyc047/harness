@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import FakeProvider
 
 from harness.context.compactor import ContextCompactor
 from harness.context.offload import OffloadExecutor
@@ -15,8 +16,6 @@ from harness.core.runner import CompactionEvent, Runner
 from harness.llm.base import LLMResponse
 from harness.tools.base import tool
 from harness.tools.registry import ToolRegistry
-
-from conftest import FakeProvider
 
 
 class _CapturingProvider(FakeProvider):
@@ -52,7 +51,15 @@ async def test_compaction_at_turn_boundary(tmp_path):
 
     main_provider = _CapturingProvider(
         script=[
-            LLMResponse(tool_calls=[ToolCall(id="c1", name="echo", arguments=json.dumps({"text": "x" * 200}))]),
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="c1",
+                        name="echo",
+                        arguments=json.dumps({"text": "x" * 200}),
+                    ),
+                ],
+            ),
             LLMResponse(final_text="done"),
         ]
     )
@@ -75,14 +82,23 @@ async def test_offload_binding_reduces_context(tmp_path):
     offload = OffloadExecutor(ctx, threshold=10)
     provider = _CapturingProvider(
         script=[
-            LLMResponse(tool_calls=[ToolCall(id="c1", name="echo", arguments=json.dumps({"text": "x" * 4000}))]),
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="c1",
+                        name="echo",
+                        arguments=json.dumps({"text": "x" * 4000}),
+                    ),
+                ],
+            ),
             LLMResponse(final_text="done"),
         ]
     )
     agent = Agent(name="test", instructions="sys", tools=_registry(), max_turns=5)
     runner = Runner(provider, offload_processor=offload)
 
-    events = [e async for e in runner.run_streamed(agent, "hello", session_id="s1")]
+    async for _ in runner.run_streamed(agent, "hello", session_id="s1"):
+        pass
     # 第二次 model call 里工具消息是引用而非全文
     assert len(provider.seen) == 2
     tool_msg = next(m for m in provider.seen[1] if m.role == "tool")
