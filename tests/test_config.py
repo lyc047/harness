@@ -90,3 +90,37 @@ def test_subagent_router_env():
     assert s.subagent_router == "auto"
     # unset => task-type-aware routing off (v2 behavior preserved)
     assert Settings.from_env({}).subagent_router == ""
+
+
+def test_context_defaults():
+    s = Settings.from_env({})
+    assert s.context_enabled is True
+    assert s.context_window == 1_000_000
+    assert s.context_trigger == 0.85
+    assert s.context_offload_threshold == 20_000
+    assert s.context_keep == 20
+    assert s.context_dir == "harness-context"
+
+
+def test_context_env_overrides():
+    s = Settings.from_env(
+        {
+            "HARNESS_CONTEXT_ENABLED": "false",
+            "HARNESS_CONTEXT_WINDOW": "64000",
+            "HARNESS_CONTEXT_TRIGGER": "0.5",
+            "HARNESS_CONTEXT_OFFLOAD_THRESHOLD": "5000",
+            "HARNESS_CONTEXT_KEEP": "5",
+            "HARNESS_CONTEXT_DIR": "tmp/ctx",
+        }
+    )
+    assert s.context_enabled is False
+    assert s.context_window == 64_000
+    assert s.context_trigger == 0.5
+    assert s.context_offload_threshold == 5_000
+    assert s.context_keep == 5
+    assert s.context_dir == "tmp/ctx"
+
+
+def test_context_trigger_bad_env_falls_back():
+    s = Settings.from_env({"HARNESS_CONTEXT_TRIGGER": "garbage"})
+    assert s.context_trigger == 0.85

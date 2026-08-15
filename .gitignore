@@ -27,3 +27,5 @@ harness.trace.jsonl
 # would have hidden the bundled skills that ship in the package source.
 /skills/
 /memory/
+# Context-compression runtime artifacts (offloaded tool output, transcripts)
+/harness-context/

@@ -68,6 +68,14 @@ class Settings:
     web_search_backend: str = "bing"  # bing (free, cn default) | duckduckgo | tavily-on-key
     tavily_api_key: str = ""  # optional; its presence switches web_search to Tavily
 
+    # Context compression (offload oversized tool output + auto-summarize)
+    context_enabled: bool = True
+    context_window: int = 1_000_000
+    context_trigger: float = 0.85
+    context_offload_threshold: int = 20_000
+    context_keep: int = 20
+    context_dir: str = "harness-context"
+
     # Logging / tracing
     log_level: str = "INFO"
     log_file: str = "harness.log"
@@ -115,6 +123,13 @@ class Settings:
             except ValueError:
                 return default
 
+        def get_float(name: str, default: float) -> float:
+            raw = env.get(name)
+            try:
+                return float(raw) if raw not in (None, "") else default
+            except ValueError:
+                return default
+
         return cls(
             provider=get("HARNESS_PROVIDER", default="openai_compat"),
             base_url=get("DEEPSEEK_BASE_URL", "HARNESS_BASE_URL", default="https://api.deepseek.com"),
@@ -145,6 +160,12 @@ class Settings:
             subagent_router=get("HARNESS_SUBAGENT_ROUTER"),
             web_search_backend=get("HARNESS_WEB_SEARCH_BACKEND", default="bing"),
             tavily_api_key=get("TAVILY_API_KEY"),
+            context_enabled=get_bool("HARNESS_CONTEXT_ENABLED", True),
+            context_window=get_int("HARNESS_CONTEXT_WINDOW", 1_000_000),
+            context_trigger=get_float("HARNESS_CONTEXT_TRIGGER", 0.85),
+            context_offload_threshold=get_int("HARNESS_CONTEXT_OFFLOAD_THRESHOLD", 20_000),
+            context_keep=get_int("HARNESS_CONTEXT_KEEP", 20),
+            context_dir=get("HARNESS_CONTEXT_DIR", default="harness-context"),
             log_level=get("HARNESS_LOG_LEVEL", default="INFO"),
             log_file=get("HARNESS_LOG_FILE", default="harness.log"),
             trace_file=get("HARNESS_TRACE_FILE", default="harness.trace.jsonl"),
